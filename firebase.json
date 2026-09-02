@@ -1,0 +1,39 @@
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "patios-de-retencion-vehi-a8ab7",
+          "appId": "1:746852229759:android:320b33d95ce55ea90d554a",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "patios-de-retencion-vehi-a8ab7",
+          "configurations": {
+            "android": "1:746852229759:android:320b33d95ce55ea90d554a",
+            "ios": "1:746852229759:ios:bb58c349d6940d070d554a",
+            "macos": "1:746852229759:ios:bb58c349d6940d070d554a",
+            "web": "1:746852229759:web:b79adb73e613593b0d554a",
+            "windows": "1:746852229759:web:80878666154b16c20d554a"
+          }
+        }
+      }
+    }
+  },
+  "hosting": {
+    "public": "build/web",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  }
+}

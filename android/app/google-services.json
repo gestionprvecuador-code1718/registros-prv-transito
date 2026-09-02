@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "746852229759",
+    "project_id": "patios-de-retencion-vehi-a8ab7",
+    "storage_bucket": "patios-de-retencion-vehi-a8ab7.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:746852229759:android:320b33d95ce55ea90d554a",
+        "android_client_info": {
+          "package_name": "com.example.registros_prv_transito"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "746852229759-ef4b0ta84bhot3akg9f65akepltqi3hc.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.registros_prv_transito",
+            "certificate_hash": "82f7a00f80e728bf43835bb717491677cd5af6ea"
+          }
+        },
+        {
+          "client_id": "746852229759-emi87sq9snolg1k5pj5or6unfcj6q32t.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAsR1zfd7tXzPmao-dWoJCJN859C5QMm3w"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "746852229759-emi87sq9snolg1k5pj5or6unfcj6q32t.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "746852229759-caidhu9l668la9ht9sj85k48c7hs32ki.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.registrosPrvTransito"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
