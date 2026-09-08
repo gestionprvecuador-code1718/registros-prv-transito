@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -156,8 +157,12 @@ class HomeScreen extends StatelessWidget {
               right: -30,
               bottom: -30,
               child: Opacity(
-                opacity: 0.06,
-                child: Image.asset('assets/logo.png', width: 220, height: 220),
+                // 02/sep: reemplazado assets/logo.png por assets/sello_prv.png
+                // — el sello oficial real que Xavier subió, ya recortado y
+                // sin fondo (antes assets/logo.png era un genérico). Opacidad
+                // en 0.14 para que se note sutil sobre el degradado azul.
+                opacity: 0.14,
+                child: Image.asset('assets/sello_prv.png', width: 220, height: 220),
               ),
             ),
             SafeArea(
@@ -231,89 +236,85 @@ class HomeScreen extends StatelessWidget {
                       subtitulo: 'Registrar la devolución / libertad de un vehículo',
                       // 01/sep: Libertad = VERDE (antes naranja) — confirmado por Xavier
                       color: Colors.green.shade700,
+                      // 02/sep: BUG CORREGIDO — este botón mandaba a CapturaScreen()
+                      // (la MISMA pantalla de escanear un Ingreso nuevo), así que
+                      // tocar "LIBERTAD" en realidad iniciaba un Ingreso, no una
+                      // Libertad. El flujo real de Libertad en esta app siempre
+                      // parte de buscar el Ingreso ya existente (para heredar sus
+                      // datos), así que este botón ahora manda directo a
+                      // "Buscar por placa", donde ya existe el botón funcional
+                      // "Liberar vehículo" junto a cada caso sin libertad.
                       onTap: () => Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => const CapturaScreen(),
+                          builder: (_) => const BuscarPlacaScreen(),
                         ),
                       ),
                     ),
                     const SizedBox(height: 16),
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        style: _estiloBotonClaro(),
-                        icon: const Icon(Icons.search),
-                        label: const Text('Buscar por placa (editar un caso)'),
-                        onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const BuscarPlacaScreen())),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        style: _estiloBotonClaro(),
-                        icon: const Icon(Icons.travel_explore),
-                        label: const Text('Consultar Información (base ANT/AXIS)'),
-                        onPressed: () => _abrirConsultaVehiculos(context),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        icon: const Icon(Icons.table_chart_outlined),
-                        // 01/sep: renombrado de "EXPORTAR MATRIZ COMPLETA A EXCEL (.XLSX)"
-                        label: const Text('GENERAR EXCEL'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.teal.shade600,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                        ),
-                        onPressed: () => _exportarExcelMasivo(context),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        style: _estiloBotonClaro(),
-                        icon: const Icon(Icons.summarize_outlined),
-                        // 01/sep: renombrado de "Generar informe semanal"
-                        label: const Text('Generar Informe Semanal'),
-                        onPressed: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => const InformeSemanalScreen()),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
+                    // 02/sep: reemplazo de los 6 botones "planos" por tarjetas
+                    // de vidrio translúcido en grilla 2 columnas — es el pedido
+                    // original de Xavier (Imagen 1 del mockup) que se había
+                    // quedado pendiente. El fondo degradado azul del Scaffold
+                    // NO se toca; estas tarjetas solo van encima con
+                    // BackdropFilter + opacidad baja para el efecto vidrio.
+                    GridView.count(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      crossAxisCount: 2,
+                      crossAxisSpacing: 12,
+                      mainAxisSpacing: 12,
+                      childAspectRatio: 1,
                       children: [
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            style: _estiloBotonClaro(),
-                            icon: const Icon(Icons.description_outlined),
-                            label: const Text('Ver Ingresos'),
-                            onPressed: () => Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => const DocumentoScreen(tipo: TipoParte.ingreso),
-                              ),
+                        _TarjetaVidrio(
+                          icono: Icons.search,
+                          colorIcono: Colors.lightBlueAccent,
+                          titulo: 'Buscar placa',
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (_) => const BuscarPlacaScreen()),
+                          ),
+                        ),
+                        _TarjetaVidrio(
+                          icono: Icons.travel_explore,
+                          colorIcono: Colors.tealAccent,
+                          titulo: 'Consultar info',
+                          onTap: () => _abrirConsultaVehiculos(context),
+                        ),
+                        _TarjetaVidrio(
+                          icono: Icons.table_chart_outlined,
+                          colorIcono: Colors.purpleAccent,
+                          titulo: 'Generar Excel',
+                          onTap: () => _exportarExcelMasivo(context),
+                        ),
+                        _TarjetaVidrio(
+                          icono: Icons.summarize_outlined,
+                          colorIcono: Colors.orangeAccent,
+                          titulo: 'Generar Informe Semanal',
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (_) => const InformeSemanalScreen()),
+                          ),
+                        ),
+                        _TarjetaVidrio(
+                          icono: Icons.description_outlined,
+                          colorIcono: Colors.grey.shade300,
+                          titulo: 'Ver ingresos',
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const DocumentoScreen(tipo: TipoParte.ingreso),
                             ),
                           ),
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            style: _estiloBotonClaro(),
-                            icon: const Icon(Icons.description_outlined),
-                            label: const Text('Ver Libertades'),
-                            onPressed: () => Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => const DocumentoScreen(tipo: TipoParte.libertad),
-                              ),
+                        _TarjetaVidrio(
+                          icono: Icons.copy_all_outlined,
+                          colorIcono: Colors.grey.shade300,
+                          titulo: 'Ver libertades',
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const DocumentoScreen(tipo: TipoParte.libertad),
                             ),
                           ),
                         ),
@@ -328,13 +329,65 @@ class HomeScreen extends StatelessWidget {
       ),
     );
   }
+}
 
-  // 01/sep: estilo compartido para los botones "neutros" — blanco sobre
-  // el fondo azul institucional, para que se sigan viendo bien.
-  ButtonStyle _estiloBotonClaro() {
-    return OutlinedButton.styleFrom(
-      foregroundColor: Colors.white,
-      side: const BorderSide(color: Colors.white70),
+// 02/sep: tarjeta de vidrio translúcido (glassmorphism) — icono en color +
+// título, usada en la grilla 2x2+2 del home (Buscar placa, Consultar info,
+// Generar Excel, Generar Informe Semanal, Ver ingresos, Ver libertades).
+// El texto usa maxLines+overflow para que títulos largos ("Generar Informe
+// Semanal") hagan salto de línea en vez de desbordarse.
+class _TarjetaVidrio extends StatelessWidget {
+  final IconData icono;
+  final Color colorIcono;
+  final String titulo;
+  final VoidCallback onTap;
+
+  const _TarjetaVidrio({
+    required this.icono,
+    required this.colorIcono,
+    required this.titulo,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(18),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+        child: Material(
+          color: Colors.white.withOpacity(0.10),
+          child: InkWell(
+            onTap: onTap,
+            splashColor: Colors.white24,
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: Colors.white.withOpacity(0.25)),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(icono, color: colorIcono, size: 34),
+                  const SizedBox(height: 10),
+                  Text(
+                    titulo,
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

@@ -1,326 +1,364 @@
-// RUTA DE ARCHIVO: lib/screens/captura_screen.dart
-
-import 'dart:convert';
-import 'dart:typed_data';
+import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
-import '../models/caso_ingreso.dart';
-import '../services/api_key_service.dart';
+import 'home_screen.dart';
 import 'formulario_screen.dart';
+import 'seleccionar_vehiculo_screen.dart';
+import 'ajustes_screen.dart';
+import '../services/gemini_vision_service.dart';
+import '../services/api_key_service.dart';
+import '../services/pdf_parser_service.dart';
+import '../models/caso_ingreso.dart';
+import '../models/caso_libertad.dart';
 
 class CapturaScreen extends StatefulWidget {
-  const CapturaScreen({super.key});
+  final TipoParte tipo;
+
+  /// Caso de Libertad ya prellenado (desde "Liberar vehículo" en
+  /// Buscar por placa). Si viene, NO se crea un CasoLibertad en
+  /// blanco: se combinan los datos ya heredados del Ingreso con lo
+  /// que Gemini extraiga de las fotos nuevas (memorando, oficio,
+  /// pagos, etc.).
+  final CasoLibertad? casoLibertadBase;
+
+  const CapturaScreen({super.key, required this.tipo, this.casoLibertadBase});
 
   @override
   State<CapturaScreen> createState() => _CapturaScreenState();
 }
 
 class _CapturaScreenState extends State<CapturaScreen> {
+  final List<File> _imagenes = [];
   final ImagePicker _picker = ImagePicker();
-  bool _estaProcesando = false;
-  String _estadoProcesamiento = '';
-  String? _error;
+  bool _procesando = false;
 
-  // 30/ago: se conservan los últimos bytes capturados (foto, galería o
-  // PDF) para poder REINTENTAR sin pedirle al oficial que vuelva a
-  // tomar la foto o elegir el archivo — antes se perdía al fallar.
-  Uint8List? _ultimosBytes;
-  String? _ultimoMimeType;
+  String get _titulo => widget.tipo == TipoParte.ingreso
+      ? 'Nuevo Ingreso'
+      : (widget.casoLibertadBase != null ? 'Liberar vehículo — ${widget.casoLibertadBase!.placa}' : 'Nueva Libertad');
 
-  // 31/ago: esta pantalla leía la API Key directo de SharedPreferences
-  // con una clave escrita a mano ('gemini_api_key'), que NO es
-  // necesariamente la misma que usa ApiKeyService (la clase real que
-  // usa ajustes_screen.dart para GUARDAR la clave). Si los nombres no
-  // coincidían, Ajustes mostraba "ya tienes una API key configurada"
-  // pero esta pantalla seguía sin encontrarla — eso explica el error
-  // "No hay una API Key de Gemini configurada" que Xavier reportó
-  // incluso después de guardarla. Ahora se usa el mismo servicio.
-  final _apiKeyService = ApiKeyService();
+  Future<void> _tomarFoto() async {
+    final foto = await _picker.pickImage(source: ImageSource.camera, imageQuality: 90);
+    if (foto != null) setState(() => _imagenes.add(File(foto.path)));
+  }
 
-  Future<String?> _obtenerApiKey() => _apiKeyService.obtenerApiKey();
-
-  Future<void> _elegirImagen(ImageSource origen) async {
-    final XFile? imagen = await _picker.pickImage(source: origen, imageQuality: 85);
-    if (imagen == null) return;
-    final bytes = await imagen.readAsBytes();
-    setState(() {
-      _ultimosBytes = bytes;
-      _ultimoMimeType = 'image/jpeg';
-      _error = null;
-    });
-    await _procesarConIA();
+  Future<void> _elegirDeGaleria() async {
+    final fotos = await _picker.pickMultiImage(imageQuality: 90);
+    if (fotos.isNotEmpty) {
+      setState(() => _imagenes.addAll(fotos.map((f) => File(f.path))));
+    }
   }
 
   Future<void> _elegirPdf() async {
-    final resultado = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['pdf'],
-      withData: true,
-    );
-    final archivo = resultado?.files.single;
-    if (archivo?.bytes == null) return;
-    setState(() {
-      _ultimosBytes = archivo!.bytes;
-      _ultimoMimeType = 'application/pdf';
-      _error = null;
-    });
-    await _procesarConIA();
+    final resultado = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['pdf']);
+    if (resultado == null || resultado.files.single.path == null) return;
+
+    setState(() => _procesando = true);
+    try {
+      final pdfFile = File(resultado.files.single.path!);
+      final parser = PdfParserService();
+      final texto = parser.extraerTexto(pdfFile);
+      final metadatos = parser.extraerMetadatos(texto);
+      final participantes = parser.extraerParticipantes(texto);
+
+      if (!mounted) return;
+
+      if (participantes.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No se detectó ningún vehículo en este PDF. Prueba con las fotos.')),
+        );
+        return;
+      }
+
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => SeleccionarVehiculoScreen(participantes: participantes, metadatos: metadatos),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No se pudo leer el PDF: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _procesando = false);
+    }
   }
 
-  static final _prompt = TextPart('''
-Analiza el siguiente documento oficial de tránsito/policial (Parte Policial, Hoja de Ingreso, Alcoholemia o Memorando) y extrae los datos en formato JSON estricto.
+  Future<void> _procesar() async {
+    if (_imagenes.isEmpty) return;
 
-Reglas de Normalización y Sinónimos:
-- tipoVehiculo: Normalizar a uno de estos: AUTOMÓVIL, MOTOCICLETA, CAMIONETA, AUTOBÚS, CAMIÓN, TRAILER. (Ejemplo: "moto", "pasola", "moped" -> "MOTOCICLETA").
-- tipoOperativo: "SIN OPERATIVO" si no se menciona un operativo específico; "OPERATIVO N°" (y extraer el número en numeroOperativo) si el documento menciona un operativo con número.
-- Alcoholemia: Si ves valores en g/L o texto de prueba de alcohol, extrae numeroPruebaAlcoholemia, resultadoAlcoholemia, nombreSancionado y cedulaSancionado, y marca aplicaAlcohotest en true.
-- Motocicleta: Si es motocicleta, intenta extraer el cilindraje en cc.
-- traslado: "SUS PROPIOS MEDIOS" si el vehículo llegó por su cuenta, "PARTICULAR" si lo trajo una grúa/wincha particular.
-
-Responde ÚNICAMENTE con el siguiente JSON:
-{
-  "hojaIngresoNro": "", "parteIngresoNro": "", "fechaIngreso": "", "horaRetencion": "",
-  "subzona": "", "crv": "", "tipoOperativo": "", "numeroOperativo": "",
-  "placa": "", "marca": "", "modelo": "", "anioFabricacion": "",
-  "color": "", "tipoVehiculo": "", "cilindraje": "", "chasis": "", "motor": "",
-  "causaLegal": "", "detalleCausa": "",
-  "aplicaAlcohotest": false, "numeroPruebaAlcoholemia": "", "resultadoAlcoholemia": "",
-  "nombreSancionado": "", "cedulaSancionado": "",
-  "propietario": "", "cedulaPropietario": "", "conductor": "", "cedulaConductor": "",
-  "traslado": "", "nombreGruaParticular": "", "telefonoGruaParticular": "", "valorGrua": "", "kmGrua": "",
-  "custodioRecibeNombre": "", "policiaNombre": "", "policiaCedula": ""
-}
-''');
-
-  Future<void> _procesarConIA() async {
-    if (_ultimosBytes == null || _ultimoMimeType == null) return;
-
-    final apiKey = await _obtenerApiKey();
+    final apiKey = await ApiKeyService().obtenerApiKey();
     if (apiKey == null) {
-      setState(() => _error =
-          'No hay una API Key de Gemini configurada. Ve a "Ajustes de IA" (⚙️ en la pantalla principal) y agrégala, o usa "Llenar a mano" por ahora.');
-      return;
-    }
-
-    setState(() {
-      _estaProcesando = true;
-      _estadoProcesamiento = 'Analizando documento con Inteligencia Artificial...';
-      _error = null;
-    });
-
-    const intentosMax = 3;
-    for (var intento = 1; intento <= intentosMax; intento++) {
-      try {
-        // 01/sep: 'gemini-1.5-flash' fue DADO DE BAJA por Google (error real:
-        // "models/gemini-1.5-flash is not found for API version v1beta").
-        // Esto — y NO tu internet — era lo que impedía subir cualquier
-        // parte hasta ahora. Se usa el alias 'gemini-flash-latest', que
-        // Google mantiene apuntando siempre a un modelo Flash vigente, para
-        // que la app no se vuelva a romper la próxima vez que retiren una
-        // versión.
-        final model = GenerativeModel(model: 'gemini-flash-latest', apiKey: apiKey);
-        final content = [
-          Content.multi([_prompt, DataPart(_ultimoMimeType!, _ultimosBytes!)])
-        ];
-        final response = await model.generateContent(content).timeout(const Duration(seconds: 45));
-
-        if (response.text == null) {
-          throw Exception('La IA no devolvió texto.');
-        }
-        _irAlFormulario(response.text!);
-        return;
-      } catch (e) {
-        final texto = e.toString();
-        final esErrorDeRed = texto.contains('SocketException') ||
-            texto.contains('ClientException') ||
-            texto.contains('Failed host lookup') ||
-            texto.contains('TimeoutException') ||
-            texto.contains('connection abort');
-        // 01/sep: si Google vuelve a retirar el modelo en el futuro, este
-        // mensaje evita que se muestre el error crudo de la API.
-        final esModeloNoDisponible =
-            texto.contains('is not found for API version') || texto.contains('not supported for generateContent');
-        // 02/sep: error real reportado por Xavier — servidor de Google
-        // saturado temporalmente ("Server Error [503]... currently
-        // experiencing high demand... status: UNAVAILABLE"). Antes NO se
-        // reintentaba (solo se reintentaban errores de red), así que se
-        // mostraba de una sola vez en lugar de insistir como con la
-        // conexión. Ahora también se reintenta.
-        final esServidorSaturado =
-            texto.contains('UNAVAILABLE') || texto.contains('503') || texto.contains('high demand');
-
-        if ((esErrorDeRed || esServidorSaturado) && intento < intentosMax) {
-          if (mounted) {
-            setState(() => _estadoProcesamiento = esServidorSaturado
-                ? 'El servicio de IA está saturado, reintentando (${intento + 1}/$intentosMax)...'
-                : 'Problema de conexión, reintentando (${intento + 1}/$intentosMax)...');
-          }
-          await Future.delayed(Duration(seconds: 2 * intento)); // 2s, luego 4s
-          continue;
-        }
-
-        if (mounted) {
-          setState(() {
-            _estaProcesando = false;
-            // 31/ago (ronda 2): las 2 capturas que compartió Xavier son
-            // errores de RED/DNS (ClientException / "Failed host
-            // lookup"), no del código ni de la API Key — ya se reintentó
-            // 3 veces automáticamente y las 3 fallaron por conexión.
-            // Mensaje más claro para que sepa que es su wifi/datos, no
-            // un bug de la app.
-            _error = esErrorDeRed
-                ? 'No se pudo conectar a internet para analizar el documento (se reintentó $intentosMax veces). '
-                    'Revisa tu wifi o datos móviles e inténtalo de nuevo, o usa "Llenar a mano" mientras tanto.'
-                : esServidorSaturado
-                    ? 'El servicio de IA de Google está saturado en este momento (se reintentó $intentosMax veces). '
-                        'No es un problema de tu conexión ni de la app — espera unos minutos y toca "Reintentar", '
-                        'o usa "Llenar a mano" mientras tanto.'
-                    : esModeloNoDisponible
-                        ? 'El servicio de IA no está disponible en este momento (no es un problema de tu conexión). '
-                            'Usa "Llenar a mano" mientras se soluciona, o avísale a Xavier.'
-                        : 'Error al procesar el documento: $e';
-          });
-        }
+      if (!mounted) return;
+      final configurar = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Falta configurar la IA'),
+          content: const Text(
+              'Todavía no has guardado tu API key gratuita de Gemini. Puedes configurarla ahora, '
+              'o llenar el formulario a mano sin usar IA.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Llenar a mano')),
+            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Configurar ahora')),
+          ],
+        ),
+      );
+      if (configurar == true) {
+        if (!mounted) return;
+        await Navigator.push(context, MaterialPageRoute(builder: (_) => const AjustesScreen()));
+        return; // el usuario vuelve a tocar "Extraer datos" luego de configurar
+      } else {
+        _abrirFormularioVacio();
         return;
       }
     }
-  }
 
-  void _irAlFormulario(String jsonResponseText) {
-    final cleanJson = jsonResponseText.replaceAll('```json', '').replaceAll('```', '').trim();
-    CasoIngreso? caso;
+    setState(() => _procesando = true);
+    final gemini = GeminiVisionService();
+    final id = widget.casoLibertadBase?.id ?? DateTime.now().millisecondsSinceEpoch.toString();
+
     try {
-      final data = jsonDecode(cleanJson) as Map<String, dynamic>;
-      data['id'] = DateTime.now().millisecondsSinceEpoch.toString();
-      caso = CasoIngreso.fromJson(data);
-    } catch (_) {
-      caso = null; // si el JSON viene mal formado, el formulario se abre vacío (llenar a mano)
+      if (widget.tipo == TipoParte.ingreso) {
+        final datos = await gemini.extraerIngreso(_imagenes, apiKey);
+        final caso = CasoIngreso(
+          id: id,
+          hojaIngresoNro: datos['hojaIngresoNro'] ?? '',
+          crv: datos['crv'] ?? '',
+          fechaIngreso: datos['fechaIngreso'] ?? '',
+          tipoVehiculo: datos['tipoVehiculo'] ?? '',
+          marca: datos['marca'] ?? '',
+          color: datos['color'] ?? '',
+          placa: datos['placa'] ?? '',
+          propietario: datos['propietario'] ?? '',
+          cedulaPropietario: datos['cedulaPropietario'] ?? datos['cedula'] ?? '',
+          causa: datos['causa'] ?? '',
+          comoLlego: datos['comoLlego'] ?? '',
+          tomaProcedimiento: datos['tomaProcedimiento'] ?? '',
+        );
+        if (!mounted) return;
+        Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => FormularioIngresoScreen(caso: caso)));
+      } else {
+        // datos = lo que Gemini logre leer de las fotos nuevas
+        // (memorando, oficio, juez que firma, orden de pago, comprobante...)
+        final datos = await gemini.extraerLibertad(_imagenes, apiKey);
+        final base = widget.casoLibertadBase;
+
+        // Si viene un pago nuevo extraído (orden de pago / comprobante),
+        // se arma como PagoGaraje; si no se extrajo nada de pago, se
+        // conserva el/los pago(s) que ya traía el caso base (o uno vacío).
+        List<PagoGaraje> pagos;
+        final huboDatosDePago = (datos['ordenPagoNro'] ?? datos['comprobantePagoNro'] ?? datos['valor']) != null;
+        if (huboDatosDePago) {
+          pagos = [
+            PagoGaraje(
+              ordenPagoNro: datos['ordenPagoNro'] ?? '',
+              comprobantePagoNro: datos['comprobantePagoNro'] ?? '',
+              diasPagados: datos['diasPagados'] ?? datos['cantidadDias'] ?? '',
+              precioUnitario: datos['precioUnitario'] ?? '',
+              valor: datos['valor'] ?? datos['valorTotal'] ?? '',
+              horaFechaPago: datos['horaFechaPago'] ?? '',
+              entidadFinanciera: datos['entidadFinanciera'] ?? '',
+            ),
+          ];
+        } else {
+          pagos = base?.pagos ?? [PagoGaraje()];
+        }
+
+        final observacionComision = (datos['valorTransaccionOComision'] ?? '').trim();
+        final caso = CasoLibertad(
+          id: id,
+          // Heredado del Ingreso (si venimos de "Liberar vehículo"),
+          // con la extracción de Gemini como respaldo si algo faltara.
+          hojaIngresoNro: base?.hojaIngresoNro ?? datos['hojaIngresoNro'] ?? '',
+          parteIngresoNro: base?.parteIngresoNro ?? datos['parteIngresoNro'] ?? '',
+          marca: base?.marca ?? datos['marca'] ?? '',
+          color: base?.color ?? datos['color'] ?? '',
+          placa: base?.placa ?? datos['placa'] ?? '',
+          tipoVehiculo: base?.tipoVehiculo ?? datos['tipoVehiculo'] ?? '',
+          crv: base?.crv ?? datos['crv'] ?? '',
+          dirigidoA: base?.dirigidoA ?? datos['dirigidoA'] ?? 'Mi Mayor',
+          causa: base?.causa ?? datos['causa'] ?? '',
+          fechaIngreso: base?.fechaIngreso ?? datos['fechaIngreso'] ?? '',
+          retiradoPor: base?.retiradoPor ?? datos['retiradoPor'] ?? '',
+          cedulaRetira: base?.cedulaRetira ?? datos['cedulaRetira'] ?? '',
+          // Genuinamente nuevo de Libertad: siempre viene de esta extracción.
+          memorandoNro: datos['memorandoNro'] ?? '',
+          memorandoFecha: datos['memorandoFecha'] ?? '',
+          oficioDevolucionNro: datos['oficioDevolucionNro'] ?? '',
+          oficioDevolucionFecha: datos['oficioDevolucionFecha'] ?? '',
+          firmadoPor: datos['firmadoPor'] ?? '',
+          fechaSalida: datos['fechaSalida'] ?? '',
+          diasPermanencia: datos['diasPermanencia'] ?? '',
+          observaciones: observacionComision.isNotEmpty
+              ? 'El comprobante muestra un valor de transacción/comisión de $observacionComision aparte del valor base.'
+              : (base?.observaciones ?? ''),
+          pagos: pagos,
+        );
+        if (!mounted) return;
+        Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => FormularioLibertadScreen(caso: caso)));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      final continuar = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('No se pudo escanear'),
+          content: Text('Puede ser que no haya internet en este momento, o la API key sea inválida.\n\nDetalle: $e'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Reintentar')),
+            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Llenar a mano')),
+          ],
+        ),
+      );
+      if (continuar == true) _abrirFormularioVacio();
+    } finally {
+      if (mounted) setState(() => _procesando = false);
     }
-    if (!mounted) return;
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (_) => FormularioScreen(casoExistente: caso)),
-    );
   }
 
-  void _llenarAMano() {
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (_) => const FormularioScreen()),
-    );
+  void _abrirFormularioVacio() {
+    final id = widget.casoLibertadBase?.id ?? DateTime.now().millisecondsSinceEpoch.toString();
+    if (widget.tipo == TipoParte.ingreso) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => FormularioIngresoScreen(caso: CasoIngreso(id: id))),
+      );
+    } else {
+      // Si veníamos de "Liberar vehículo", igual conservamos lo
+      // prellenado aunque el usuario decida llenar el resto a mano.
+      final caso = widget.casoLibertadBase ?? CasoLibertad(id: id);
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => FormularioLibertadScreen(caso: caso)),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Escanear Documento / Parte'),
-        backgroundColor: Colors.blueGrey[900],
-      ),
-      body: Center(
-        child: _estaProcesando
-            ? Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const CircularProgressIndicator(),
-                  const SizedBox(height: 16),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: Text(_estadoProcesamiento, style: const TextStyle(fontSize: 16), textAlign: TextAlign.center),
-                  ),
-                ],
-              )
-            : SingleChildScrollView(
-                padding: const EdgeInsets.all(24.0),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.document_scanner, size: 80, color: Colors.blueGrey),
-                    const SizedBox(height: 20),
-                    const Text(
-                      'OCR Progresivo Inteligente',
-                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+      appBar: AppBar(title: Text(_titulo)),
+      body: Column(
+        children: [
+          if (widget.casoLibertadBase != null)
+            Container(
+              width: double.infinity,
+              color: Theme.of(context).colorScheme.secondaryContainer,
+              padding: const EdgeInsets.all(12),
+              child: Text(
+                'Ya se heredaron los datos del Ingreso (Hoja ${widget.casoLibertadBase!.hojaIngresoNro}). '
+                'Toma fotos del oficio de devolución/memorando y de la orden de pago/comprobante para '
+                'completar lo que falta.',
+                style: const TextStyle(fontSize: 13),
+              ),
+            ),
+          Expanded(
+            child: _imagenes.isEmpty
+                ? const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(32),
+                      child: Text(
+                        'Toma una o varias fotos de los documentos del caso\n'
+                        '(parte policial, hoja de ingreso, memorando, etc.)',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.black54),
+                      ),
                     ),
-                    const SizedBox(height: 10),
-                    const Text(
-                      'Toma una foto, selecciona una imagen o sube el PDF del parte policial u hoja de ingreso. '
-                      'La IA extraerá los datos y autocompletará solo los casilleros vacíos.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.grey),
+                  )
+                : GridView.builder(
+                    padding: const EdgeInsets.all(12),
+                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 3,
+                      crossAxisSpacing: 8,
+                      mainAxisSpacing: 8,
                     ),
-                    const SizedBox(height: 32),
-                    if (_error != null) ...[
-                      Card(
-                        color: Colors.red.shade50,
-                        child: Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: Column(
-                            children: [
-                              Text(_error!, style: TextStyle(color: Colors.red.shade900)),
-                              const SizedBox(height: 12),
-                              Wrap(
-                                alignment: WrapAlignment.center,
-                                spacing: 12,
-                                runSpacing: 8,
-                                children: [
-                                  if (_ultimosBytes != null)
-                                    OutlinedButton.icon(
-                                      icon: const Icon(Icons.refresh),
-                                      label: const Text('Reintentar'),
-                                      onPressed: _procesarConIA,
-                                    ),
-                                  OutlinedButton.icon(
-                                    icon: const Icon(Icons.edit_outlined),
-                                    label: const Text('Llenar a mano'),
-                                    onPressed: _llenarAMano,
-                                  ),
-                                ],
-                              ),
-                            ],
+                    itemCount: _imagenes.length,
+                    itemBuilder: (context, i) => Stack(
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.file(_imagenes[i],
+                              fit: BoxFit.cover, width: double.infinity, height: double.infinity),
+                        ),
+                        Positioned(
+                          top: 2,
+                          right: 2,
+                          child: GestureDetector(
+                            onTap: () => setState(() => _imagenes.removeAt(i)),
+                            child: const CircleAvatar(
+                              radius: 12,
+                              backgroundColor: Colors.black54,
+                              child: Icon(Icons.close, size: 14, color: Colors.white),
+                            ),
                           ),
                         ),
+                      ],
+                    ),
+                  ),
+          ),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.camera_alt),
+                          label: const Text('Cámara'),
+                          onPressed: _procesando ? null : _tomarFoto,
+                        ),
                       ),
-                      const SizedBox(height: 20),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.photo_library),
+                          label: const Text('Galería'),
+                          onPressed: _procesando ? null : _elegirDeGaleria,
+                        ),
+                      ),
                     ],
-                    ElevatedButton.icon(
-                      onPressed: () => _elegirImagen(ImageSource.camera),
-                      icon: const Icon(Icons.camera_alt),
-                      label: const Text('TOMAR FOTO CON LA CÁMARA'),
-                      style: ElevatedButton.styleFrom(
-                        minimumSize: const Size.fromHeight(50),
-                        backgroundColor: Colors.blueGrey[900],
-                        foregroundColor: Colors.white,
-                      ),
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.picture_as_pdf),
+                      label: const Text('Subir documento PDF (parte policial)'),
+                      onPressed: _procesando ? null : _elegirPdf,
                     ),
-                    const SizedBox(height: 16),
-                    OutlinedButton.icon(
-                      onPressed: () => _elegirImagen(ImageSource.gallery),
-                      icon: const Icon(Icons.photo_library),
-                      label: const Text('SELECCIONAR DE LA GALERÍA'),
-                      style: OutlinedButton.styleFrom(
-                        minimumSize: const Size.fromHeight(50),
-                      ),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      icon: _procesando
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                            )
+                          : const Icon(Icons.document_scanner),
+                      label: Text(_procesando ? 'Procesando...' : 'Extraer datos (OCR)'),
+                      onPressed: (_imagenes.isEmpty || _procesando) ? null : _procesar,
                     ),
-                    const SizedBox(height: 16),
-                    OutlinedButton.icon(
-                      onPressed: _elegirPdf,
-                      icon: const Icon(Icons.picture_as_pdf_outlined),
-                      label: const Text('SUBIR PARTE POLICIAL (PDF)'),
-                      style: OutlinedButton.styleFrom(
-                        minimumSize: const Size.fromHeight(50),
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                    TextButton.icon(
-                      onPressed: _llenarAMano,
-                      icon: const Icon(Icons.edit_outlined),
-                      label: const Text('Prefiero llenar el formulario a mano'),
+                  ),
+                  if (widget.casoLibertadBase != null) ...[
+                    const SizedBox(height: 8),
+                    TextButton(
+                      onPressed: _procesando ? null : _abrirFormularioVacio,
+                      child: const Text('Omitir fotos y llenar el resto a mano'),
                     ),
                   ],
-                ),
+                ],
               ),
+            ),
+          ),
+        ],
       ),
     );
   }

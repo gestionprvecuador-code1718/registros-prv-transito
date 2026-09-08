@@ -322,9 +322,10 @@ class _FormularioLibertadScreenState extends State<FormularioLibertadScreen> {
               _campo(_firmadoPorCtrl, 'Firmado por (fiscal/juez/autoridad)'),
               DropdownButtonFormField<String>(
                 initialValue: _gradoDestinatario,
+                isExpanded: true,
                 decoration: const InputDecoration(labelText: 'Parte elevado al Sr/a (grado)'),
                 items: _gradosDestinatario
-                    .map((g) => DropdownMenuItem(value: g, child: Text(g)))
+                    .map((g) => DropdownMenuItem(value: g, child: Text(g, overflow: TextOverflow.ellipsis)))
                     .toList(),
                 onChanged: (v) => setState(() => _gradoDestinatario = v ?? 'Mayor'),
               ),
@@ -351,6 +352,7 @@ class _FormularioLibertadScreenState extends State<FormularioLibertadScreen> {
               _campo(_causaCtrl, 'Causa (se muestra en el Word)', lineas: 2),
               DropdownButtonFormField<String>(
                 initialValue: _tipoServicioGaraje,
+                isExpanded: true,
                 decoration: const InputDecoration(labelText: 'Tipo de servicio de garaje'),
                 items: _tiposServicioGaraje
                     .map((t) => DropdownMenuItem(value: t, child: Text(t, overflow: TextOverflow.ellipsis)))
@@ -671,6 +673,7 @@ class _PagoCardState extends State<_PagoCard> {
             initialValue: widget.pago.entidadFinancieraOficial.isNotEmpty
                 ? widget.pago.entidadFinancieraOficial
                 : null,
+            isExpanded: true,
             decoration: InputDecoration(
               labelText: 'Banco oficial (SIIPNE 3W)',
               helperText: _sugerencia != null && widget.pago.entidadFinancieraOficial == _sugerencia
@@ -678,7 +681,7 @@ class _PagoCardState extends State<_PagoCard> {
                   : null,
             ),
             items: EntidadFinancieraService.oficiales
-                .map((b) => DropdownMenuItem(value: b, child: Text(b)))
+                .map((b) => DropdownMenuItem(value: b, child: Text(b, overflow: TextOverflow.ellipsis)))
                 .toList(),
             onChanged: _onOficialElegido,
             validator: (v) => (v == null || v.isEmpty) ? 'Elige el banco oficial' : null,

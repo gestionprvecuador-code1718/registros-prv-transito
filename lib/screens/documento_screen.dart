@@ -9,6 +9,53 @@ import '../models/caso_libertad.dart';
 import '../services/storage_service.dart';
 import 'buscar_placa_screen.dart' show EstadoVehiculoIcon;
 import 'formulario_screen.dart';
+import 'formulario_libertad_screen.dart';
+
+/// 02/sep: sello grande tipo "estampado" (rojo = todavía en el patio,
+/// verde = ya liberado) — Xavier pidió aprovechar el espacio libre debajo
+/// de cada caso encontrado para que el estado se note de un vistazo,
+/// como un sello de goma. Reutilizable en cualquier pantalla que liste
+/// ingresos/libertades.
+class SelloEstadoGrande extends StatelessWidget {
+  final bool liberado;
+  const SelloEstadoGrande({super.key, required this.liberado});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = liberado ? Colors.green.shade700 : Colors.red.shade700;
+    final texto = liberado ? 'LIBERADO' : 'EN EL PATIO';
+    final icono = liberado ? Icons.check_circle_outline : Icons.lock_outline;
+    return Center(
+      child: Transform.rotate(
+        angle: -0.08,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
+          decoration: BoxDecoration(
+            border: Border.all(color: color, width: 3),
+            borderRadius: BorderRadius.circular(10),
+            color: color.withValues(alpha: 0.08),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icono, color: color, size: 26),
+              const SizedBox(width: 8),
+              Text(
+                texto,
+                style: TextStyle(
+                  color: color,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 20,
+                  letterSpacing: 1.2,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 /// Ya no existe un solo .docx con "todos los ingresos juntos" (eso era
 /// de la arquitectura vieja). Ahora esta pantalla simplemente lista
@@ -37,15 +84,32 @@ class _DocumentoScreenState extends State<DocumentoScreen> {
   }
 
   Future<void> _cargar() async {
-    if (_esIngreso) {
-      final lista = await StorageService.obtenerIngresos();
-      lista.sort((a, b) => b.creado.compareTo(a.creado)); // más reciente primero
-      if (mounted) setState(() { _ingresos = lista; _cargando = false; });
-    } else {
-      final lista = await StorageService.obtenerLibertades();
-      lista.sort((a, b) => b.creado.compareTo(a.creado));
-      if (mounted) setState(() { _libertades = lista; _cargando = false; });
+    // 02/sep: ahora SIEMPRE se cargan ambas listas (antes solo se cargaba
+    // una u otra según la pestaña) — se necesita cruzar ingresos con
+    // libertades para saber el estado REAL de cada vehículo (antes el
+    // ícono quedaba fijo en rojo aunque ya estuviera liberado).
+    final ingresos = await StorageService.obtenerIngresos();
+    ingresos.sort((a, b) => b.creado.compareTo(a.creado));
+    final libertades = await StorageService.obtenerLibertades();
+    libertades.sort((a, b) => b.creado.compareTo(a.creado));
+    if (mounted) {
+      setState(() {
+        _ingresos = ingresos;
+        _libertades = libertades;
+        _cargando = false;
+      });
     }
+  }
+
+  bool _yaTieneLibertad(CasoIngreso ingreso) {
+    return _libertades.any((l) => l.hojaIngresoNro == ingreso.hojaIngresoNro);
+  }
+
+  void _liberarVehiculo(CasoIngreso ingreso) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => FormularioLibertadScreen(ingreso: ingreso)),
+    ).then((_) => _cargar());
   }
 
   Future<void> _compartirIngreso(CasoIngreso c) async {
@@ -85,45 +149,84 @@ class _DocumentoScreenState extends State<DocumentoScreen> {
                   padding: const EdgeInsets.symmetric(vertical: 8),
                   children: _esIngreso
                       ? _ingresos
-                          .map((c) => Card(
-                                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                                child: ListTile(
-                                  leading: const EstadoVehiculoIcon(liberado: false),
-                                  title: Text('${c.placa} — ${c.marca} ${c.color}'),
-                                  subtitle: Text('Hoja ${c.hojaIngresoNro} — ${c.fechaIngreso}'),
-                                  trailing: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      IconButton(
-                                        icon: const Icon(Icons.share_outlined),
-                                        tooltip: 'Compartir / Descargar',
-                                        onPressed: () => _compartirIngreso(c),
-                                      ),
-                                      IconButton(
-                                        icon: const Icon(Icons.edit),
-                                        tooltip: 'Editar',
-                                        onPressed: () => Navigator.push(
-                                          context,
-                                          MaterialPageRoute(builder: (_) => FormularioScreen(casoExistente: c)),
-                                        ).then((_) => _cargar()),
-                                      ),
-                                    ],
+                          .map((c) {
+                            final tieneLibertad = _yaTieneLibertad(c);
+                            return Card(
+                              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  ListTile(
+                                    leading: EstadoVehiculoIcon(liberado: tieneLibertad),
+                                    title: Text('${c.placa} — ${c.marca} ${c.color}'),
+                                    subtitle: Text('Hoja ${c.hojaIngresoNro} — ${c.fechaIngreso}'),
+                                    trailing: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        IconButton(
+                                          icon: const Icon(Icons.share_outlined),
+                                          tooltip: 'Compartir / Descargar',
+                                          onPressed: () => _compartirIngreso(c),
+                                        ),
+                                        IconButton(
+                                          icon: const Icon(Icons.edit),
+                                          tooltip: 'Editar',
+                                          onPressed: () => Navigator.push(
+                                            context,
+                                            MaterialPageRoute(builder: (_) => FormularioScreen(casoExistente: c)),
+                                          ).then((_) => _cargar()),
+                                        ),
+                                      ],
+                                    ),
                                   ),
-                                ),
-                              ))
+                                  // 02/sep: sello grande visible + botón "Liberar
+                                  // vehículo" — Xavier pidió aprovechar el
+                                  // espacio libre debajo de cada caso.
+                                  Padding(
+                                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 14),
+                                    child: Column(
+                                      children: [
+                                        SelloEstadoGrande(liberado: tieneLibertad),
+                                        if (!tieneLibertad) ...[
+                                          const SizedBox(height: 12),
+                                          SizedBox(
+                                            width: double.infinity,
+                                            child: FilledButton.tonalIcon(
+                                              icon: const Icon(Icons.logout),
+                                              label: const Text('Liberar vehículo'),
+                                              onPressed: () => _liberarVehiculo(c),
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          })
                           .toList()
                       : _libertades
                           .map((c) => Card(
                                 margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                                child: ListTile(
-                                  leading: const EstadoVehiculoIcon(liberado: true),
-                                  title: Text('${c.placa} — ${c.marca} ${c.color}'),
-                                  subtitle: Text('Hoja ${c.hojaIngresoNro} — Salida ${c.fechaSalida}'),
-                                  trailing: IconButton(
-                                    icon: const Icon(Icons.share_outlined),
-                                    tooltip: 'Compartir / Descargar',
-                                    onPressed: () => _compartirLibertad(c),
-                                  ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  children: [
+                                    ListTile(
+                                      leading: const EstadoVehiculoIcon(liberado: true),
+                                      title: Text('${c.placa} — ${c.marca} ${c.color}'),
+                                      subtitle: Text('Hoja ${c.hojaIngresoNro} — Salida ${c.fechaSalida}'),
+                                      trailing: IconButton(
+                                        icon: const Icon(Icons.share_outlined),
+                                        tooltip: 'Compartir / Descargar',
+                                        onPressed: () => _compartirLibertad(c),
+                                      ),
+                                    ),
+                                    const Padding(
+                                      padding: EdgeInsets.fromLTRB(12, 4, 12, 14),
+                                      child: SelloEstadoGrande(liberado: true),
+                                    ),
+                                  ],
                                 ),
                               ))
                           .toList(),

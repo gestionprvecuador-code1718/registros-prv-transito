@@ -1,13 +1,10 @@
-// RUTA DE ARCHIVO: lib/screens/buscar_placa_screen.dart
-
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:share_plus/share_plus.dart';
+import '../services/storage_service.dart';
 import '../models/caso_ingreso.dart';
 import '../models/caso_libertad.dart';
-import '../services/storage_service.dart';
 import 'formulario_screen.dart';
-import 'formulario_libertad_screen.dart';
+import 'captura_screen.dart';
+import 'home_screen.dart' show TipoParte;
 
 class BuscarPlacaScreen extends StatefulWidget {
   const BuscarPlacaScreen({super.key});
@@ -16,42 +13,9 @@ class BuscarPlacaScreen extends StatefulWidget {
   State<BuscarPlacaScreen> createState() => _BuscarPlacaScreenState();
 }
 
-/// Ícono vectorizado (vehículo + moto, Material Icons son vectores) que
-/// indica de un vistazo el estado del vehículo: ROJO = todavía
-/// ingresado en el patio, VERDE = ya fue liberado. El mismo widget se
-/// puede reutilizar tal cual en cualquier otra pantalla que liste
-/// vehículos (ej. un futuro panel nacional).
-class EstadoVehiculoIcon extends StatelessWidget {
-  final bool liberado;
-  final double size;
-  const EstadoVehiculoIcon({super.key, required this.liberado, this.size = 22});
-
-  @override
-  Widget build(BuildContext context) {
-    final color = liberado ? Colors.green.shade600 : Colors.red.shade600;
-    return Tooltip(
-      message: liberado ? 'Vehículo liberado' : 'Vehículo ingresado (en el patio)',
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.directions_car, color: color, size: size),
-            const SizedBox(width: 2),
-            Icon(Icons.two_wheeler, color: color, size: size),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class _BuscarPlacaScreenState extends State<BuscarPlacaScreen> {
   final _controller = TextEditingController();
+  final _storage = StorageService();
   List<CasoIngreso> _ingresos = [];
   List<CasoLibertad> _libertades = [];
   bool _buscando = false;
@@ -62,8 +26,8 @@ class _BuscarPlacaScreenState extends State<BuscarPlacaScreen> {
     if (placa.isEmpty) return;
     setState(() => _buscando = true);
 
-    final ingresos = await StorageService.buscarIngresosPorPlaca(placa);
-    final libertades = await StorageService.buscarLibertadesPorPlaca(placa);
+    final ingresos = await _storage.buscarIngresosPorPlaca(placa);
+    final libertades = await _storage.buscarLibertadesPorPlaca(placa);
 
     if (mounted) {
       setState(() {
@@ -75,63 +39,61 @@ class _BuscarPlacaScreenState extends State<BuscarPlacaScreen> {
     }
   }
 
-  /// True si ya existe un caso de Libertad para la misma hoja de ingreso.
+  /// True si ya existe un caso de Libertad para la misma hoja de
+  /// ingreso (para no duplicar el botón "Liberar vehículo").
   bool _yaTieneLibertad(CasoIngreso ingreso) {
     return _libertades.any((l) => l.hojaIngresoNro == ingreso.hojaIngresoNro);
   }
 
-  void _editarIngreso(CasoIngreso c) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => FormularioScreen(casoExistente: c)),
-    ).then((_) => _buscar()); // refresca por si guardó cambios
+  /// Arma un CasoLibertad prellenado con los datos que ya se
+  /// conocen desde el Ingreso, dejando en blanco solo lo que
+  /// realmente es nuevo en la Libertad (memorando, oficio, pagos, etc.)
+  ///
+  /// NOTA: ajusta "id" y "creado" según cómo generes esos valores
+  /// en el resto de tu app (por ejemplo si usas un paquete uuid,
+  /// o si "creado" es un Timestamp de Firestore en vez de DateTime).
+  CasoLibertad _libertadPrellenadaDesde(CasoIngreso ingreso) {
+    return CasoLibertad(
+      id: DateTime.now().millisecondsSinceEpoch.toString(), // TODO: revisar esquema real de IDs
+      memorandoNro: '',
+      memorandoFecha: '',
+      oficioDevolucionNro: '',
+      firmadoPor: '',
+      marca: ingreso.marca,
+      color: ingreso.color,
+      placa: ingreso.placa,
+      retiradoPor: ingreso.propietario,
+      cedulaRetira: ingreso.cedulaPropietario,
+      hojaIngresoNro: ingreso.hojaIngresoNro,
+      parteIngresoNro: ingreso.parteIngresoNro,
+      fechaIngreso: ingreso.fechaIngreso,
+      diasPermanencia: '',
+      tipoVehiculo: ingreso.tipoVehiculo,
+      crv: ingreso.crv,
+      dirigidoA: ingreso.dirigidoA,
+      causa: ingreso.causa,
+      pagos: [PagoGaraje()],
+      creado: DateTime.now(), // TODO: revisar el tipo real del campo "creado"
+    );
   }
 
-  void _liberarVehiculo(CasoIngreso ingreso) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => FormularioLibertadScreen(ingreso: ingreso)),
-    ).then((_) => _buscar()); // refresca para que el ícono pase a verde
-  }
-
-  void _editarLibertad(CasoLibertad libertad) {
-    // Busca el ingreso original de esta libertad (por hoja de ingreso)
-    // para poder mostrar los datos heredados de solo lectura al editar.
-    CasoIngreso? ingresoBase;
-    try {
-      ingresoBase = _ingresos.firstWhere((i) => i.hojaIngresoNro == libertad.hojaIngresoNro);
-    } catch (_) {
-      ingresoBase = null;
-    }
-    if (ingresoBase == null) return;
+  Future<void> _liberarVehiculo(CasoIngreso ingreso) async {
+    // Si ya existe un borrador automático (creado al guardar el
+    // Ingreso), lo usamos — puede tener ediciones previas guardadas.
+    // Si no existe (por ejemplo, un Ingreso antiguo de antes de esta
+    // función), se arma uno nuevo con los datos heredados.
+    final borrador = await _storage.buscarBorradorLibertadPorHoja(ingreso.hojaIngresoNro);
+    final casoBase = borrador ?? _libertadPrellenadaDesde(ingreso);
+    if (!mounted) return;
+    // Vamos primero a la cámara: ahí se toman las fotos del oficio de
+    // devolución/memorando y de la orden de pago/comprobante, y esos
+    // datos nuevos se combinan con lo ya heredado del Ingreso.
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => FormularioLibertadScreen(ingreso: ingresoBase!, existente: libertad),
+        builder: (_) => CapturaScreen(tipo: TipoParte.libertad, casoLibertadBase: casoBase),
       ),
-    ).then((_) => _buscar());
-  }
-
-  Future<void> _compartirIngreso(CasoIngreso c) async {
-    final bytes = StorageService.generarWordIngreso(c);
-    final nombre = StorageService.obtenerNombreArchivoWord(placa: c.placa, esIngreso: true);
-    final xFile = XFile.fromData(
-      Uint8List.fromList(bytes),
-      name: nombre,
-      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     );
-    await Share.shareXFiles([xFile], text: 'Ingreso ${c.placa} - REGISTROS PRV TRANSITO');
-  }
-
-  Future<void> _compartirLibertad(CasoLibertad c) async {
-    final bytes = StorageService.generarWordLibertad(c);
-    final nombre = StorageService.obtenerNombreArchivoWord(placa: c.placa, esIngreso: false);
-    final xFile = XFile.fromData(
-      Uint8List.fromList(bytes),
-      name: nombre,
-      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    );
-    await Share.shareXFiles([xFile], text: 'Libertad ${c.placa} - REGISTROS PRV TRANSITO');
   }
 
   @override
@@ -184,23 +146,15 @@ class _BuscarPlacaScreenState extends State<BuscarPlacaScreen> {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         ListTile(
-                          leading: EstadoVehiculoIcon(liberado: tieneLibertad),
+                          leading: const CircleAvatar(child: Icon(Icons.login)),
                           title: Text('INGRESO — ${c.placa}'),
                           subtitle: Text('${c.marca} ${c.color} — Hoja ${c.hojaIngresoNro}'),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                icon: const Icon(Icons.share_outlined),
-                                tooltip: 'Compartir / Descargar',
-                                onPressed: () => _compartirIngreso(c),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.edit),
-                                tooltip: 'Editar',
-                                onPressed: () => _editarIngreso(c),
-                              ),
-                            ],
+                          trailing: const Icon(Icons.edit),
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => FormularioIngresoScreen(caso: c, esEdicion: true),
+                            ),
                           ),
                         ),
                         if (!tieneLibertad)
@@ -222,23 +176,15 @@ class _BuscarPlacaScreenState extends State<BuscarPlacaScreen> {
                 ..._libertades.map((c) => Card(
                       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                       child: ListTile(
-                        leading: const EstadoVehiculoIcon(liberado: true),
+                        leading: const CircleAvatar(child: Icon(Icons.logout)),
                         title: Text('LIBERTAD — ${c.placa}'),
                         subtitle: Text('${c.marca} ${c.color} — Hoja ${c.hojaIngresoNro}'),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              icon: const Icon(Icons.share_outlined),
-                              tooltip: 'Compartir / Descargar',
-                              onPressed: () => _compartirLibertad(c),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.edit),
-                              tooltip: 'Editar',
-                              onPressed: () => _editarLibertad(c),
-                            ),
-                          ],
+                        trailing: const Icon(Icons.edit),
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => FormularioLibertadScreen(caso: c, esEdicion: true),
+                          ),
                         ),
                       ),
                     )),

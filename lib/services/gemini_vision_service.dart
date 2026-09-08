@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'dart:typed_data';
+import 'dart:io';
 import 'package:http/http.dart' as http;
 
 /// Envía una o varias fotos a Google Gemini (modelo con visión) y le pide
@@ -11,28 +11,10 @@ import 'package:http/http.dart' as http;
 /// mano — a costa de necesitar internet y una API key.
 ///
 /// La API key es gratuita: se obtiene en https://aistudio.google.com/apikey
-///
-/// NOTA WEB: este servicio recibe los bytes de cada foto (Uint8List)
-/// en vez de un File de dart:io, porque en el navegador no existe un
-/// sistema de archivos real y las fotos que entrega image_picker ahí
-/// son blob URLs, no rutas de archivo. Recibir bytes directamente
-/// funciona igual en Android, iPhone y web.
-///
-/// NOTA SOBRE VELOCIDAD/TIMEOUTS: en conexiones lentas (común en
-/// varios patios) la llamada a Gemini a veces no alcanza a responder
-/// dentro del tiempo de espera. En vez de que el oficial tenga que
-/// tocar "Reintentar" a mano varias veces, _extraer ya reintenta sola
-/// hasta 3 veces antes de mostrar el error. Además, captura_screen.dart
-/// ahora limita el ancho de las fotos a 1920px antes de tomarlas, lo
-/// que reduce bastante el peso de cada imagen (y por lo tanto el
-/// tiempo de subida) sin perder legibilidad del texto.
 class GeminiVisionService {
   static const _modelo = 'gemini-3.6-flash';
   static const _endpoint =
       'https://generativelanguage.googleapis.com/v1beta/models/$_modelo:generateContent';
-
-  static const _timeoutPorIntento = Duration(seconds: 45);
-  static const _intentosMaximos = 3;
 
   static const _camposIngreso = [
     'hojaIngresoNro',
@@ -43,6 +25,7 @@ class GeminiVisionService {
     'color',
     'placa',
     'propietario',
+    'cedulaPropietario',
     'causa',
     'comoLlego',
     'tomaProcedimiento',
@@ -80,10 +63,10 @@ class GeminiVisionService {
     'entidadFinanciera',
   ];
 
-  Future<Map<String, String>> extraerIngreso(List<Uint8List> imagenes, String apiKey) =>
+  Future<Map<String, String>> extraerIngreso(List<File> imagenes, String apiKey) =>
       _extraer(imagenes, apiKey, _camposIngreso, _promptIngreso);
 
-  Future<Map<String, String>> extraerLibertad(List<Uint8List> imagenes, String apiKey) =>
+  Future<Map<String, String>> extraerLibertad(List<File> imagenes, String apiKey) =>
       _extraer(imagenes, apiKey, _camposLibertad, _promptLibertad);
 
   static const _promptIngreso = '''
@@ -98,6 +81,7 @@ Extrae SOLO los siguientes datos de la parte SUPERIOR de la hoja (ingreso), en J
 - color: color del vehículo
 - placa: placas del vehículo (formato ecuatoriano, 3 letras + números, ej. "PAD-1978")
 - propietario: nombre completo del propietario
+- cedulaPropietario: número de cédula del propietario. Búscalo primero junto al nombre del propietario en la parte superior; si no aparece ahí, búscalo en la sección inferior "RECIBE CONFORME" o junto a la palabra "Yo" (quien retira el vehículo) — a veces solo está ahí. Si viene de un PDF con varios datos del propietario/conductor, tómalo de esa sección.
 - causa: causa de la detención (ej. "Accidente de tránsito")
 - comoLlego: quién entrega el vehículo / cómo llegó
 - tomaProcedimiento: quién elabora el parte policial (grado y nombre)
@@ -142,7 +126,7 @@ REGLAS IMPORTANTES:
 Responde ÚNICAMENTE el objeto JSON con las claves: hojaIngresoNro, marca, color, placa, fechaIngreso, fechaSalida, retiradoPor, cedulaRetira, memorandoNro, memorandoFecha, oficioDevolucionNro, oficioDevolucionFecha, firmadoPor, ordenPagoNro, diasPagados, precioUnitario, tipoServicioGaraje, comprobantePagoNro, valor, valorTransaccionOComision, horaFechaPago, entidadFinanciera.''';
 
   Future<Map<String, String>> _extraer(
-    List<Uint8List> imagenes,
+    List<File> imagenes,
     String apiKey,
     List<String> campos,
     String prompt,
@@ -151,10 +135,8 @@ Responde ÚNICAMENTE el objeto JSON con las claves: hojaIngresoNro, marca, color
       {'text': prompt}
     ];
 
-    for (final bytes in imagenes) {
-      // Ya no leemos de un File de dart:io — los bytes de cada foto
-      // ya vienen listos desde captura_screen.dart (funciona igual
-      // en Android, iPhone y web).
+    for (final img in imagenes) {
+      final bytes = await img.readAsBytes();
       parts.add({
         'inline_data': {
           'mime_type': 'image/jpeg',
@@ -167,58 +149,28 @@ Responde ÚNICAMENTE el objeto JSON con las claves: hojaIngresoNro, marca, color
       'contents': [
         {'parts': parts}
       ],
-      'generationConfig': {
-        'response_mime_type': 'application/json',
-        // Nuestras respuestas son un JSON corto (una veintena de
-        // campos de texto breve como máximo); limitar el máximo de
-        // tokens ayuda a que Gemini no se demore generando de más.
-        'maxOutputTokens': 1024,
-      },
+      'generationConfig': {'response_mime_type': 'application/json'},
     });
 
-    // Reintento automático: en conexiones lentas, la primera llamada
-    // a veces se queda esperando y se agota el tiempo de espera. En
-    // vez de que el oficial tenga que tocar "Reintentar" varias veces
-    // a mano, se reintenta sola hasta _intentosMaximos veces antes de
-    // dejar que el error llegue a captura_screen.dart.
-    Object ultimoError = Exception('No se pudo contactar a Gemini.');
+    final respuesta = await http
+        .post(
+          Uri.parse('$_endpoint?key=$apiKey'),
+          headers: {'Content-Type': 'application/json'},
+          body: body,
+        )
+        .timeout(const Duration(seconds: 45));
 
-    for (var intento = 1; intento <= _intentosMaximos; intento++) {
-      try {
-        final respuesta = await http
-            .post(
-              Uri.parse('$_endpoint?key=$apiKey'),
-              headers: {'Content-Type': 'application/json'},
-              body: body,
-            )
-            .timeout(_timeoutPorIntento);
-
-        if (respuesta.statusCode != 200) {
-          throw Exception('Gemini respondió ${respuesta.statusCode}: ${respuesta.body}');
-        }
-
-        final data = jsonDecode(respuesta.body);
-        final texto = data['candidates']?[0]?['content']?['parts']?[0]?['text'];
-        if (texto == null) {
-          throw Exception('Respuesta inesperada de Gemini: ${respuesta.body}');
-        }
-
-        final json = jsonDecode(texto) as Map<String, dynamic>;
-        return {for (final campo in campos) campo: (json[campo] ?? '').toString()};
-      } catch (e) {
-        ultimoError = e;
-        if (intento < _intentosMaximos) {
-          // Espera un poco más en cada intento (2s, luego 4s) antes
-          // de volver a probar, por si la red estaba momentáneamente
-          // saturada.
-          await Future.delayed(Duration(seconds: intento * 2));
-        }
-      }
+    if (respuesta.statusCode != 200) {
+      throw Exception('Gemini respondió ${respuesta.statusCode}: ${respuesta.body}');
     }
 
-    // Si llegamos aquí, los _intentosMaximos fallaron: recién ahí se
-    // deja que el error suba a captura_screen.dart (que muestra el
-    // diálogo de "No se pudo escanear" / "Llenar a mano").
-    throw ultimoError;
+    final data = jsonDecode(respuesta.body);
+    final texto = data['candidates']?[0]?['content']?['parts']?[0]?['text'];
+    if (texto == null) {
+      throw Exception('Respuesta inesperada de Gemini: ${respuesta.body}');
+    }
+
+    final json = jsonDecode(texto) as Map<String, dynamic>;
+    return {for (final campo in campos) campo: (json[campo] ?? '').toString()};
   }
 }
