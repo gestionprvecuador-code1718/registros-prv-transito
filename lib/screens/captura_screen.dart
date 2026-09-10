@@ -1,9 +1,12 @@
+// RUTA DE ARCHIVO: lib/screens/captura_screen.dart
+
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
 import 'home_screen.dart';
 import 'formulario_screen.dart';
+import 'formulario_libertad_screen.dart';
 import 'seleccionar_vehiculo_screen.dart';
 import 'ajustes_screen.dart';
 import '../services/gemini_vision_service.dart';
@@ -15,14 +18,14 @@ import '../models/caso_libertad.dart';
 class CapturaScreen extends StatefulWidget {
   final TipoParte tipo;
 
-  /// Caso de Libertad ya prellenado (desde "Liberar vehículo" en
-  /// Buscar por placa). Si viene, NO se crea un CasoLibertad en
-  /// blanco: se combinan los datos ya heredados del Ingreso con lo
-  /// que Gemini extraiga de las fotos nuevas (memorando, oficio,
-  /// pagos, etc.).
-  final CasoLibertad? casoLibertadBase;
+  /// Ingreso del que nace la Libertad (viene de "Liberar vehículo" en
+  /// Buscar por placa / Ver ingresos). Solo se usa cuando tipo ==
+  /// TipoParte.libertad — permite heredar placa/marca/color/hoja/
+  /// causa y combinar esos datos con lo que Gemini extraiga de las
+  /// fotos nuevas (memorando, oficio, orden de pago, comprobante).
+  final CasoIngreso? ingresoBase;
 
-  const CapturaScreen({super.key, required this.tipo, this.casoLibertadBase});
+  const CapturaScreen({super.key, required this.tipo, this.ingresoBase});
 
   @override
   State<CapturaScreen> createState() => _CapturaScreenState();
@@ -35,7 +38,7 @@ class _CapturaScreenState extends State<CapturaScreen> {
 
   String get _titulo => widget.tipo == TipoParte.ingreso
       ? 'Nuevo Ingreso'
-      : (widget.casoLibertadBase != null ? 'Liberar vehículo — ${widget.casoLibertadBase!.placa}' : 'Nueva Libertad');
+      : (widget.ingresoBase != null ? 'Liberar vehículo — ${widget.ingresoBase!.placa}' : 'Nueva Libertad');
 
   Future<void> _tomarFoto() async {
     final foto = await _picker.pickImage(source: ImageSource.camera, imageQuality: 90);
@@ -50,14 +53,18 @@ class _CapturaScreenState extends State<CapturaScreen> {
   }
 
   Future<void> _elegirPdf() async {
-    final resultado = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['pdf']);
-    if (resultado == null || resultado.files.single.path == null) return;
+    final resultado = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['pdf'],
+      withData: true,
+    );
+    if (resultado == null || resultado.files.single.bytes == null) return;
 
     setState(() => _procesando = true);
     try {
-      final pdfFile = File(resultado.files.single.path!);
+      final bytes = resultado.files.single.bytes!;
       final parser = PdfParserService();
-      final texto = parser.extraerTexto(pdfFile);
+      final texto = parser.extraerTextoBytes(bytes);
       final metadatos = parser.extraerMetadatos(texto);
       final participantes = parser.extraerParticipantes(texto);
 
@@ -118,7 +125,7 @@ class _CapturaScreenState extends State<CapturaScreen> {
 
     setState(() => _procesando = true);
     final gemini = GeminiVisionService();
-    final id = widget.casoLibertadBase?.id ?? DateTime.now().millisecondsSinceEpoch.toString();
+    final id = DateTime.now().millisecondsSinceEpoch.toString();
 
     try {
       if (widget.tipo == TipoParte.ingreso) {
@@ -126,79 +133,105 @@ class _CapturaScreenState extends State<CapturaScreen> {
         final caso = CasoIngreso(
           id: id,
           hojaIngresoNro: datos['hojaIngresoNro'] ?? '',
+          parteIngresoNro: datos['parteIngresoNro'] ?? '',
           crv: datos['crv'] ?? '',
+          subzona: datos['subzona'] ?? '',
           fechaIngreso: datos['fechaIngreso'] ?? '',
+          horaRetencion: datos['horaRetencion'] ?? '',
           tipoVehiculo: datos['tipoVehiculo'] ?? '',
           marca: datos['marca'] ?? '',
+          modelo: datos['modelo'] ?? '',
+          anioFabricacion: datos['anioFabricacion'] ?? '',
           color: datos['color'] ?? '',
+          cilindraje: datos['cilindraje'] ?? '',
+          chasis: datos['chasis'] ?? '',
+          motor: datos['motor'] ?? '',
           placa: datos['placa'] ?? '',
           propietario: datos['propietario'] ?? '',
-          cedulaPropietario: datos['cedulaPropietario'] ?? datos['cedula'] ?? '',
-          causa: datos['causa'] ?? '',
-          comoLlego: datos['comoLlego'] ?? '',
-          tomaProcedimiento: datos['tomaProcedimiento'] ?? '',
+          cedulaPropietario: datos['cedulaPropietario'] ?? '',
+          conductor: datos['conductor'] ?? '',
+          cedulaConductor: datos['cedulaConductor'] ?? '',
+          causaLegal: datos['causaLegal'] ?? '',
+          detalleCausa: datos['detalleCausa'] ?? '',
+          traslado: datos['traslado'] ?? '',
+          custodioRecibeNombre: datos['custodioRecibeNombre'] ?? '',
+          policiaNombre: datos['policiaNombre'] ?? '',
+          policiaCedula: datos['policiaCedula'] ?? '',
         );
         if (!mounted) return;
         Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => FormularioIngresoScreen(caso: caso)));
       } else {
+        final ingreso = widget.ingresoBase;
         // datos = lo que Gemini logre leer de las fotos nuevas
         // (memorando, oficio, juez que firma, orden de pago, comprobante...)
         final datos = await gemini.extraerLibertad(_imagenes, apiKey);
-        final base = widget.casoLibertadBase;
 
-        // Si viene un pago nuevo extraído (orden de pago / comprobante),
-        // se arma como PagoGaraje; si no se extrajo nada de pago, se
-        // conserva el/los pago(s) que ya traía el caso base (o uno vacío).
-        List<PagoGaraje> pagos;
-        final huboDatosDePago = (datos['ordenPagoNro'] ?? datos['comprobantePagoNro'] ?? datos['valor']) != null;
-        if (huboDatosDePago) {
-          pagos = [
-            PagoGaraje(
-              ordenPagoNro: datos['ordenPagoNro'] ?? '',
-              comprobantePagoNro: datos['comprobantePagoNro'] ?? '',
-              diasPagados: datos['diasPagados'] ?? datos['cantidadDias'] ?? '',
-              precioUnitario: datos['precioUnitario'] ?? '',
-              valor: datos['valor'] ?? datos['valorTotal'] ?? '',
-              horaFechaPago: datos['horaFechaPago'] ?? '',
-              entidadFinanciera: datos['entidadFinanciera'] ?? '',
-            ),
-          ];
-        } else {
-          pagos = base?.pagos ?? [PagoGaraje()];
-        }
+        final huboDatosDePago = (datos['ordenPagoNro'] ?? datos['comprobantePagoNro'] ?? datos['valor']) != null &&
+            ((datos['ordenPagoNro'] ?? '').isNotEmpty ||
+                (datos['comprobantePagoNro'] ?? '').isNotEmpty ||
+                (datos['valor'] ?? '').isNotEmpty);
+
+        final pagos = huboDatosDePago
+            ? [
+                PagoGaraje(
+                  ordenPagoNro: datos['ordenPagoNro'] ?? '',
+                  comprobantePagoNro: datos['comprobantePagoNro'] ?? '',
+                  diasPagados: datos['diasPagados'] ?? '',
+                  precioUnitario: datos['precioUnitario'] ?? '',
+                  valor: datos['valor'] ?? '',
+                  horaFechaPago: datos['horaFechaPago'] ?? '',
+                  entidadFinanciera: datos['entidadFinanciera'] ?? '',
+                ),
+              ]
+            : [PagoGaraje()];
 
         final observacionComision = (datos['valorTransaccionOComision'] ?? '').trim();
+
         final caso = CasoLibertad(
           id: id,
-          // Heredado del Ingreso (si venimos de "Liberar vehículo"),
-          // con la extracción de Gemini como respaldo si algo faltara.
-          hojaIngresoNro: base?.hojaIngresoNro ?? datos['hojaIngresoNro'] ?? '',
-          parteIngresoNro: base?.parteIngresoNro ?? datos['parteIngresoNro'] ?? '',
-          marca: base?.marca ?? datos['marca'] ?? '',
-          color: base?.color ?? datos['color'] ?? '',
-          placa: base?.placa ?? datos['placa'] ?? '',
-          tipoVehiculo: base?.tipoVehiculo ?? datos['tipoVehiculo'] ?? '',
-          crv: base?.crv ?? datos['crv'] ?? '',
-          dirigidoA: base?.dirigidoA ?? datos['dirigidoA'] ?? 'Mi Mayor',
-          causa: base?.causa ?? datos['causa'] ?? '',
-          fechaIngreso: base?.fechaIngreso ?? datos['fechaIngreso'] ?? '',
-          retiradoPor: base?.retiradoPor ?? datos['retiradoPor'] ?? '',
-          cedulaRetira: base?.cedulaRetira ?? datos['cedulaRetira'] ?? '',
+          // Heredado del Ingreso, con la extracción de Gemini como
+          // respaldo si por algún motivo no viniera el ingreso base.
+          hojaIngresoNro: ingreso?.hojaIngresoNro ?? datos['hojaIngresoNro'] ?? '',
+          parteIngresoNro: ingreso?.parteIngresoNro ?? '',
+          marca: ingreso?.marca ?? datos['marca'] ?? '',
+          color: ingreso?.color ?? datos['color'] ?? '',
+          placa: ingreso?.placa ?? datos['placa'] ?? '',
+          tipoVehiculo: ingreso?.tipoVehiculo ?? '',
+          crv: ingreso?.crv ?? '',
+          causa: ingreso != null
+              ? [ingreso.causaLegal, ingreso.detalleCausa].where((s) => s.trim().isNotEmpty).join(' - ')
+              : '',
+          fechaIngreso: ingreso?.fechaIngreso ?? datos['fechaIngreso'] ?? '',
+          tipoServicioGaraje: datos['tipoServicioGaraje'] ?? '',
           // Genuinamente nuevo de Libertad: siempre viene de esta extracción.
           memorandoNro: datos['memorandoNro'] ?? '',
           memorandoFecha: datos['memorandoFecha'] ?? '',
           oficioDevolucionNro: datos['oficioDevolucionNro'] ?? '',
           oficioDevolucionFecha: datos['oficioDevolucionFecha'] ?? '',
           firmadoPor: datos['firmadoPor'] ?? '',
+          retiradoPor: datos['retiradoPor'] ?? '',
+          cedulaRetira: datos['cedulaRetira'] ?? '',
           fechaSalida: datos['fechaSalida'] ?? '',
-          diasPermanencia: datos['diasPermanencia'] ?? '',
           observaciones: observacionComision.isNotEmpty
               ? 'El comprobante muestra un valor de transacción/comisión de $observacionComision aparte del valor base.'
-              : (base?.observaciones ?? ''),
+              : '',
           pagos: pagos,
         );
         if (!mounted) return;
-        Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => FormularioLibertadScreen(caso: caso)));
+        if (ingreso != null) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => FormularioLibertadScreen(ingreso: ingreso, existente: caso)),
+          );
+        } else {
+          // No debería pasar en el flujo normal (siempre se viene de
+          // un Ingreso ya guardado), pero se maneja por seguridad.
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('No se encontró el Ingreso base para esta Libertad.')),
+            );
+          }
+        }
       }
     } catch (e) {
       if (!mounted) return;
@@ -220,19 +253,23 @@ class _CapturaScreenState extends State<CapturaScreen> {
   }
 
   void _abrirFormularioVacio() {
-    final id = widget.casoLibertadBase?.id ?? DateTime.now().millisecondsSinceEpoch.toString();
     if (widget.tipo == TipoParte.ingreso) {
+      final id = DateTime.now().millisecondsSinceEpoch.toString();
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => FormularioIngresoScreen(caso: CasoIngreso(id: id))),
       );
     } else {
-      // Si veníamos de "Liberar vehículo", igual conservamos lo
-      // prellenado aunque el usuario decida llenar el resto a mano.
-      final caso = widget.casoLibertadBase ?? CasoLibertad(id: id);
+      final ingreso = widget.ingresoBase;
+      if (ingreso == null) {
+        Navigator.pop(context);
+        return;
+      }
+      // FormularioLibertadScreen ya sabe construir un CasoLibertad
+      // nuevo a partir del ingreso cuando no se le pasa "existente".
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => FormularioLibertadScreen(caso: caso)),
+        MaterialPageRoute(builder: (_) => FormularioLibertadScreen(ingreso: ingreso)),
       );
     }
   }
@@ -243,13 +280,13 @@ class _CapturaScreenState extends State<CapturaScreen> {
       appBar: AppBar(title: Text(_titulo)),
       body: Column(
         children: [
-          if (widget.casoLibertadBase != null)
+          if (widget.ingresoBase != null)
             Container(
               width: double.infinity,
               color: Theme.of(context).colorScheme.secondaryContainer,
               padding: const EdgeInsets.all(12),
               child: Text(
-                'Ya se heredaron los datos del Ingreso (Hoja ${widget.casoLibertadBase!.hojaIngresoNro}). '
+                'Ya se heredaron los datos del Ingreso (Hoja ${widget.ingresoBase!.hojaIngresoNro}). '
                 'Toma fotos del oficio de devolución/memorando y de la orden de pago/comprobante para '
                 'completar lo que falta.',
                 style: const TextStyle(fontSize: 13),
@@ -323,15 +360,17 @@ class _CapturaScreenState extends State<CapturaScreen> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      icon: const Icon(Icons.picture_as_pdf),
-                      label: const Text('Subir documento PDF (parte policial)'),
-                      onPressed: _procesando ? null : _elegirPdf,
+                  if (widget.tipo == TipoParte.ingreso) ...[
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        icon: const Icon(Icons.picture_as_pdf),
+                        label: const Text('Subir documento PDF (parte policial)'),
+                        onPressed: _procesando ? null : _elegirPdf,
+                      ),
                     ),
-                  ),
+                  ],
                   const SizedBox(height: 12),
                   SizedBox(
                     width: double.infinity,
@@ -347,13 +386,11 @@ class _CapturaScreenState extends State<CapturaScreen> {
                       onPressed: (_imagenes.isEmpty || _procesando) ? null : _procesar,
                     ),
                   ),
-                  if (widget.casoLibertadBase != null) ...[
-                    const SizedBox(height: 8),
-                    TextButton(
-                      onPressed: _procesando ? null : _abrirFormularioVacio,
-                      child: const Text('Omitir fotos y llenar el resto a mano'),
-                    ),
-                  ],
+                  const SizedBox(height: 8),
+                  TextButton(
+                    onPressed: _procesando ? null : _abrirFormularioVacio,
+                    child: const Text('Omitir fotos y llenar el resto a mano'),
+                  ),
                 ],
               ),
             ),

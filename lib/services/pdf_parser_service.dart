@@ -1,3 +1,5 @@
+// RUTA DE ARCHIVO: lib/services/pdf_parser_service.dart
+
 import 'dart:typed_data';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 import '../models/participante_vehiculo.dart';
@@ -7,13 +9,35 @@ import '../models/participante_vehiculo.dart';
 /// real: no hace falta OCR, solo extraer el texto y separarlo con
 /// expresiones regulares.
 ///
-/// NOTA WEB: extraerTextoBytes recibe directamente los bytes del PDF
-/// (Uint8List) en vez de un File de dart:io, porque en el navegador
-/// no existe un sistema de archivos real. Syncfusion's PdfDocument ya
-/// aceptaba bytes (inputBytes) de todas formas, así que este cambio
-/// solo mueve la lectura de bytes (antes con pdf.readAsBytesSync())
-/// a captura_screen.dart, que ahora la obtiene de file_picker con
-/// withData: true.
+/// REGLAS DE EXTRACCIÓN (confirmadas por Xavier el 08/sep, contra 7
+/// partes reales):
+///  - Hora de retención  <- "Hora aproximada del Hecho"
+///  - Fecha de retención <- "Fecha del Hecho" (mismo casillero que
+///    antes se llamaba "Fecha de ingreso")
+///  - Nombre/cédula del policía <- el de MAYOR GRADO dentro del bloque
+///    "Personal policial que participó en el hecho" (su cédula está en
+///    la columna "Firma" de esa tabla). Formato de salida: "Grado.
+///    NOMBRE COMPLETO" (ej. "Sgos. PACA PILCO ANGEL HERIBERTO").
+///  - Conductor <- primero el bloque "Información de los
+///    aprehendidos/detenidos" (existe cuando el conductor fue
+///    aprehendido); si no existe ese bloque, se busca en
+///    "Circunstancias del hecho" con frases típicas ("quien
+///    conducía", "se identificó como conductor", "estaba manejando").
+///  - Propietario <- por defecto, el mismo dato que el conductor
+///    (tentativo — muchas veces coincide), pero queda editable porque
+///    puede no ser la misma persona.
+///  - Placa y datos técnicos del vehículo (marca/chasis/país/año) <-
+///    bloque "Objetos registrados como indicios". Solo se extraen ahí
+///    los campos que tienen un patrón inconfundible sin importar el
+///    orden en que salga el bloque (chasis = VIN de 17 caracteres,
+///    país = nombre de país conocido, año = 4 dígitos en rango
+///    plausible, marca = primera palabra después de la placa). Motor y
+///    color NO se sacan de este bloque todavía: en las muestras
+///    revisadas el orden de esos dos específicamente salía demasiado
+///    revuelto como para mapearlos con confianza.
+///  - Causa legal / Detalle causa <- todo el bloque "Circunstancias
+///    del hecho"; si dentro de ese texto aparece una cita de artículo
+///    ("art. 385 numeral 1", etc.) se usa esa cita como detalle.
 class PdfParserService {
   String? _buscar(String texto, RegExp regex, {int grupo = 1}) {
     final m = regex.firstMatch(texto);
@@ -30,36 +54,117 @@ class PdfParserService {
     return texto;
   }
 
-  /// Orden de antigüedad policial, de MAYOR a MENOR grado. Se usa para
-  /// elegir, entre todo el personal policial que participó en el
-  /// hecho (normalmente listado al final del PDF), a quien debe
-  /// figurar como "quien elabora el parte".
+  /// Limpia asteriscos de énfasis (sin valor semántico), normaliza
+  /// TODOS los tipos de salto de línea a un espacio simple (algunos
+  /// PDFs usan \r o separadores unicode en vez de \n cuando el texto
+  /// de una celda se envuelve, y eso pegaba nombres largos sin
+  /// espacio), y quita el encabezado/pie que Ecu911 repite en CADA
+  /// página ("Parte No. ... Fecha y hora de impresión...",
+  /// "REPÚBLICA DEL ECUADOR...", "Página X de Y"). Sin esto, un
+  /// bloque de texto que cruza dos páginas queda partido a la mitad
+  /// por ese repetido.
+  String _limpiar(String texto) {
+    var t = texto.replaceAll('*', '');
+    t = t.replaceAll(
+      RegExp(r'Parte\s*No\.?\s*\d+\s*Fecha y hora de impresi[oó]n:\s*\d{2}/\d{2}/\d{4}\s*\d{1,2}:\d{2}'),
+      ' ',
+    );
+    t = t.replaceAll(RegExp(r'REP[ÚU]BLICA DEL ECUADOR MINISTERIO DEL INTERIOR'), ' ');
+    t = t.replaceAll(RegExp(r'NOTICIA DEL INCIDENTE'), ' ');
+    t = t.replaceAll(RegExp(r'P[áa]gina\s*\d+\s*de\s*\d+'), ' ');
+    return t;
+  }
+
+  /// Junta todo salto de línea/espacio raro en un solo espacio, para
+  /// las búsquedas que necesitan el texto "en una sola línea".
+  String _unaLinea(String texto) =>
+      texto.replaceAll(RegExp(r'[\r\n\u2028\u2029\t]+'), ' ').replaceAll(RegExp(r'\s+'), ' ');
+
+  /// Deja solo la parte de "crudo" (lo capturado por un regex de placa,
+  /// que a veces arrastra texto de más cuando el PDF pega dos líneas
+  /// sin espacio, ej. "TDL0101Marca" -> capturaba "TDL0101M") que de
+  /// verdad tiene forma de placa ecuatoriana.
+  String _normalizarPlaca(String crudo) {
+    final limpio = crudo.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
+    // Autos/camionetas/buses/camiones: 3 letras + 4 dígitos exactos,
+    // sin letra sobrante al final (la causa del bug "TDL0101M").
+    final auto = RegExp(r'^([A-Z]{3}\d{4})').firstMatch(limpio);
+    if (auto != null) return auto.group(1)!;
+    // Motocicletas u otros formatos: letras + 3 dígitos + posible 1
+    // letra final (ej. KH039Z).
+    final moto = RegExp(r'^([A-Z]{1,3}\d{3}[A-Z]?)').firstMatch(limpio);
+    if (moto != null) return moto.group(1)!;
+    return limpio;
+  }
+
+  // ---------- Personal policial (jerarquía) ----------
+
+  /// Orden de antigüedad policial, de MAYOR a MENOR grado.
   static const List<String> _jerarquiaPolicial = [
-    'MAYR', 'CPTN', 'TNTE', 'SBTE', 'SBOP', 'SBOS', 'SGOP', 'SGOS', 'CBOP', 'CBOS', 'POLI',
+    'CRNL', 'TCRNL', 'MAYR', 'CPTN', 'TNTE', 'SBTE',
+    'SBOM', 'SBOP', 'SBOS', 'SGOP', 'SGOS', 'CBOP', 'CBOS', 'POLI',
   ];
 
-  /// Busca todas las líneas con forma "GRADO NOMBRE APELLIDO ... C.C./C.I. NNNNNNNNNN"
-  /// dentro del bloque de personal policial y devuelve el nombre y la
-  /// cédula del de mayor antigüedad, según _jerarquiaPolicial.
-  ///
-  /// NOTA: el patrón exacto de esa sección puede variar entre
-  /// plantillas de parte; si no detecta a nadie, conviene revisar con
-  /// un PDF real cómo viene escrito ese bloque (igual que se hizo
-  /// antes con el bloque de "Participante N.° N") y ajustar el regex.
-  ({String nombre, String cedula})? _personalMasAntiguo(String texto) {
+  /// Algunos partes abrevian distinto el mismo grado (ej. "TCNL." en
+  /// vez de "TCRNL.", "MYOR" en vez de "MAYR"). Se normalizan al
+  /// nombre usado en _jerarquiaPolicial antes de comparar.
+  static const Map<String, String> _sinonimosGrado = {
+    'TCNL': 'TCRNL',
+    'MYOR': 'MAYR',
+  };
+
+  /// "Función" que casi siempre aparece pegada entre el nombre y la
+  /// cédula en esa tabla (AGENTE APREHENSOR, CONDUCTOR, GUARDIA...) —
+  /// se recorta del nombre ya capturado para que quede limpio.
+  String _quitarFuncion(String nombre) {
+    return nombre
+        .replaceAll(
+          RegExp(r'\s*(AGENTE\s*APREHENSOR|JEFE\s*DE\s*PATRULLA|CONDUCTOR|GUARDIA|AUXILIAR|AGENTE)\s*$'),
+          '',
+        )
+        .trim();
+  }
+
+  /// "SGOS" -> "Sgos.", "CRNL" -> "Crnl.", etc. — el formato exacto
+  /// que pidió Xavier para el nombre del policía.
+  String _gradoTitulo(String grado) {
+    if (grado.isEmpty) return '';
+    return '${grado[0]}${grado.substring(1).toLowerCase()}.';
+  }
+
+  /// Recorta el texto completo a solo el bloque "Personal policial que
+  /// participó en el hecho" (hasta "Realizado por:" o el final del
+  /// documento), para no confundir con otros "GRADO NOMBRE" que
+  /// aparecen en otras partes del parte (ej. "Parte elevado al Sr/a",
+  /// que es a quien se DIRIGE el parte, no quien toma procedimiento).
+  String? _bloquePersonalPolicial(String texto) {
+    final inicio = RegExp(r'Personal polic[ií]al que particip[oó]?\s*en el hecho', caseSensitive: false)
+        .firstMatch(texto);
+    if (inicio == null) return null;
+    final desde = texto.substring(inicio.end);
+    final fin = RegExp(r'Realizado por:', caseSensitive: false).firstMatch(desde);
+    return fin == null ? desde : desde.substring(0, fin.start);
+  }
+
+  /// Busca, dentro del bloque de personal policial, a quien tenga el
+  /// grado más alto junto con su cédula (columna "Firma"). Devuelve el
+  /// nombre YA con el grado antepuesto: "Sgos. PACA PILCO ANGEL
+  /// HERIBERTO".
+  ({String nombre, String cedula})? _personalMasAntiguoConCedula(String texto) {
+    final bloque = _unaLinea(_bloquePersonalPolicial(texto) ?? texto);
+
     final regexLinea = RegExp(
-      r'\b(MAYR|CPTN|TNTE|SBTE|SBOP|SBOS|SGOP|SGOS|CBOP|CBOS|POLI)\.?\s+'
+      r'\b(CRNL|TCRNL|TCNL|MAYR|MYOR|CPTN|TNTE|SBTE|SBOM|SBOP|SBOS|SGOP|SGOS|CBOP|CBOS|POLI)\.?\s+'
       r'([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ .]+?)\s+'
       r'(?:C\.?C\.?|C\.?I\.?)\.?:?\s*(\d{9,10})',
     );
 
     final candidatosPorGrado = <String, ({String nombre, String cedula})>{};
-    for (final m in regexLinea.allMatches(texto.toUpperCase())) {
-      final grado = m.group(1)!;
-      // Si el mismo grado aparece más de una vez, nos quedamos con el primero.
+    for (final m in regexLinea.allMatches(bloque.toUpperCase())) {
+      final grado = _sinonimosGrado[m.group(1)!] ?? m.group(1)!;
       candidatosPorGrado.putIfAbsent(
         grado,
-        () => (nombre: m.group(2)!.trim(), cedula: m.group(3)!),
+        () => (nombre: '${_gradoTitulo(grado)} ${_quitarFuncion(m.group(2)!.trim())}', cedula: m.group(3)!),
       );
     }
 
@@ -70,136 +175,400 @@ class PdfParserService {
     return null;
   }
 
+  // ---------- Metadatos generales ----------
+
   MetadatosParte extraerMetadatos(String texto) {
-    final t = texto.replaceAll('\n', ' ');
-    final personalMasAntiguo = _personalMasAntiguo(t);
+    final limpio = _limpiar(texto);
+    final t = _unaLinea(limpio);
+
+    // Se toma primero a quien tenga el grado más alto en la tabla
+    // "Personal policial que participó en el hecho" — esa es la regla
+    // real que indicó Xavier, y no siempre coincide con "Realizado
+    // por:" (que puede ser cualquiera de los que llenó el parte
+    // digital, no necesariamente el de mayor grado). "Realizado por:"
+    // queda solo como respaldo si el documento no trae esa tabla.
+    String elaboradoPor = '';
+    String elaboradoPorCedula = '';
+    final masAntiguo = _personalMasAntiguoConCedula(limpio);
+    if (masAntiguo != null) {
+      elaboradoPor = masAntiguo.nombre;
+      elaboradoPorCedula = masAntiguo.cedula;
+    } else {
+      final realizadoPor = _buscar(
+        t,
+        RegExp(r'Realizado por:\s*([A-ZÁÉÍÓÚñÑ]+\.?\s*[A-ZÁÉÍÓÚñÑ][A-ZÁÉÍÓÚñÑ .]{2,60}?)(?:\.\s|Anexos|$)'),
+      );
+      if (realizadoPor != null) {
+        elaboradoPor = realizadoPor.trim();
+      }
+    }
 
     return MetadatosParte(
-      // "Parte Policial No." es la etiqueta más común; si no aparece,
-      // se intenta con "Parte No." (la que sale arriba del todo, junto
-      // a la fecha de impresión).
       parteNo: _buscar(t, RegExp(r'Parte Policial No\.?\s*(\d+)')) ??
           _buscar(t, RegExp(r'Parte No\.?\s*(\d+)')) ??
           '',
       fechaHecho: _buscar(t, RegExp(r'Fecha del Hecho:\s*(\d{2}/\d{2}/\d{4})')) ?? '',
       horaHecho: _buscar(t, RegExp(r'Hora aproximada del\s*Hecho:\s*(\d{1,2}:\d{2})')) ?? '',
-      direccion: _buscar(t, RegExp(r'Dirección:\s*([A-Za-zÁÉÍÓÚáéíóúñÑ0-9 ]+?)(?:Intersección|Número de Casa)')) ?? '',
-      // Distintas plantillas usan encabezados distintos para el relato
-      // del hecho ("RESUMEN EJECUTIVO" en una plantilla más vieja,
-      // "CIRCUNSTANCIAS DEL SINIESTRO DE TRÁNSITO" en el formato real
-      // de Ecu911 "Noticia del Incidente"). Se intentan ambos.
+      direccion: _buscar(t, RegExp(r'Direcci[oó]n:\s*([A-Za-zÁÉÍÓÚáéíóúñÑ0-9 ]+?)(?:Intersecci[oó]n|N[uú]mero de Casa)')) ??
+          '',
+      // El relato del hecho viene bajo la etiqueta "Circunstancias del
+      // hecho" en TODOS los formatos revisados — se lee completo, tal
+      // como pidió Xavier, para que "Causa legal"/"Detalle causa" lo
+      // aprovechen entero.
       circunstancias: _buscar(
               t,
               RegExp(
-                  r'(?:\*RESUMEN EJECUTIVO\*|CIRCUNSTANCIAS DEL SINIESTRO DE TR[ÁA]NSITO)\s*(.+?)'
-                  r'(?:\*Participante 1|Vehículo 1|Fotograf[íi]a|PERSONAS HERIDAS|PERSONA FALLECIDA|PERSONAS APREHENDIDAS)',
+                  r'Circunstancias del hecho:?\s*\.?\s*(.+?)'
+                  r'(?:Anexos\b|Objetos registrados|Garantias b[áa]sicas|Personal polic[íi]al que particip)',
                   dotAll: true)) ??
           '',
-      // Preferimos al personal policial de mayor antigüedad detectado
-      // en el bloque de participantes; si no se detecta a nadie (por
-      // ejemplo, plantilla distinta), caemos al viejo "Realizado por:".
-      elaboradoPor: personalMasAntiguo?.nombre ??
-          _buscar(t, RegExp(r'Realizado por:\s*([A-ZÁÉÍÓÚñÑ.,]+(?:\s+[A-ZÁÉÍÓÚñÑ.,]+)*)')) ??
-          '',
-      elaboradoPorCedula: personalMasAntiguo?.cedula ?? '',
+      elaboradoPor: elaboradoPor,
+      elaboradoPorCedula: elaboradoPorCedula,
     );
   }
 
-  /// Detecta cada bloque "Participante N.° N ... Vehículo participante
-  /// N.° N ..." y arma un ParticipanteVehiculo por cada uno.
-  ///
-  /// El formato real de Ecu911 ("Noticia del Incidente") NO usa
-  /// asteriscos ni las etiquetas "Propietario:"/"Conductor:" — trae un
-  /// solo nombre + cédula por participante (el conductor), seguido de
-  /// los datos del vehículo (Tipo/Marca/Placas/Color). Por eso acá
-  /// "propietario" queda vacío: no viene en este documento, se
-  /// completa a mano si hace falta.
-  List<ParticipanteVehiculo> extraerParticipantes(String texto) {
-    final porBloques = _extraerPorBloquesParticipante(texto);
-    if (porBloques.isNotEmpty) return porBloques;
+  /// Sugiere una de las opciones fijas de "Causa legal" según palabras
+  /// clave dentro de "Circunstancias del hecho".
+  String sugerirCausaLegal(String circunstancias) {
+    final c = circunstancias.toUpperCase();
+    if (c.contains('EMBRIAGUEZ') || c.contains('ALCOTEST') || c.contains('ALCOHOL')) return 'Infracción de tránsito';
+    if (c.contains('SINIESTRO') || c.contains('CHOQUE') || c.contains('COLISI') || c.contains('ACCIDENTE')) {
+      return 'Accidente de tránsito';
+    }
+    if (c.contains('ORDEN DE SERVICIO') || c.contains('OPERATIVO')) return 'Operativo de control';
+    if (c.contains('ORDEN JUDICIAL') || c.contains('JUEZ') || c.contains('JUZGADO')) return 'Orden judicial';
+    if (c.contains('FISCAL')) return 'Requerimiento fiscal';
+    return 'Otro';
+  }
 
-    // Respaldo: si el PDF no trae el encabezado "Participante N.° N"
-    // (otra plantilla de parte, por ejemplo), buscamos directamente
-    // cada "Placas:" en todo el documento y completamos los demás
-    // datos mirando el texto alrededor de esa coincidencia.
-    return _extraerFlexible(texto);
+  /// Arma el "Detalle causa": prioriza la cita textual del artículo
+  /// infringido si aparece ("art. 385 numeral 1..."), y si no hay
+  /// ninguna cita, deja un resumen corto de las circunstancias.
+  String sugerirDetalleCausa(String circunstancias) {
+    final articulo = RegExp(r'art[íi]?culos?\.?\s*\d+[^.]{0,80}', caseSensitive: false).firstMatch(circunstancias);
+    if (articulo != null) return articulo.group(0)!.trim();
+    final resumen = circunstancias.trim();
+    return resumen.length > 300 ? '${resumen.substring(0, 300)}...' : resumen;
+  }
+
+  // ---------- Información de los aprehendidos/detenidos ----------
+
+  /// Lista de (nombre, cédula) del bloque "Información de los
+  /// aprehendidos/detenidos" — ese bloque solo existe cuando el
+  /// conductor (u otra persona) fue aprehendido, y es la fuente más
+  /// confiable para "Conductor" cuando está presente.
+  List<({String nombre, String cedula})> _aprehendidos(String texto) {
+    final inicio =
+        RegExp(r'Informaci[oó]n de los aprehendidos\s*/?\s*detenidos', caseSensitive: false).firstMatch(texto);
+    if (inicio == null) return [];
+    final desde = texto.substring(inicio.end);
+    final fin = RegExp(r'Informaci[oó]n general', caseSensitive: false).firstMatch(desde);
+    final bloque = _unaLinea(fin == null ? desde : desde.substring(0, fin.start));
+
+    final regex = RegExp(r'([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ ]{4,50}?)\s+(\d{9,10})\s+\d{2}/\d{2}/\d{4}\s+\d{1,2}:\d{2}');
+    final resultado = <({String nombre, String cedula})>[];
+    for (final m in regex.allMatches(bloque.toUpperCase())) {
+      resultado.add((nombre: m.group(1)!.trim(), cedula: m.group(2)!));
+    }
+    return resultado;
+  }
+
+  /// Cuando NO hay bloque de aprehendidos, se busca en las
+  /// "Circunstancias del hecho" con las frases que Xavier confirmó que
+  /// suelen usarse: "quien conducía", "estaba conduciendo", "se
+  /// identificó como conductor", "estaba manejando".
+  ({String nombre, String? cedula})? _conductorEnCircunstancias(String circunstancias) {
+    if (circunstancias.trim().isEmpty) return null;
+    final c = circunstancias;
+
+    final patrones = [
+      r'identific[aá]ndose\s+c[oó]mo\s+([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ ]{4,50})',
+      r'se\s+identific[oó]\s+c[oó]mo\s+conductor[^,]*,\s*([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ ]{4,50})',
+      r'qui[eé]n\s+manifest[oó]\s+ser\s+el\s+conductor[^,]*,\s*([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ ]{4,50})',
+      r'conductor[,:]?\s+([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ ]{4,50}),?\s*(?:con\s+)?C\.?C',
+      r'estaba\s+manejando[^,]*,?\s*([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ ]{4,50})',
+    ];
+
+    for (final patron in patrones) {
+      final m = RegExp(patron, caseSensitive: false).firstMatch(c);
+      final nombre = m?.group(1)?.trim();
+      if (nombre != null && nombre.isNotEmpty) {
+        final idx = c.toUpperCase().indexOf(nombre.toUpperCase());
+        final ventana = idx == -1 ? c : c.substring(idx, (idx + nombre.length + 80).clamp(0, c.length));
+        final cedula = _buscar(ventana, RegExp(r'C\.?C\.?:?\s*(\d{9,10})'));
+        return (nombre: nombre.toUpperCase(), cedula: cedula);
+      }
+    }
+    return null;
+  }
+
+  /// Reparte cada aprehendido a la placa más cercana en el texto (en
+  /// caracteres de distancia) — solo hace falta cuando hay más de un
+  /// vehículo y más de un aprehendido; con uno de cada, se asignan
+  /// directo.
+  Map<String, ({String nombre, String cedula})> _asignarAprehendidosAPlacas(
+    String texto,
+    List<({String nombre, String cedula})> aprehendidos,
+    List<String> placas,
+  ) {
+    if (aprehendidos.isEmpty || placas.isEmpty) return {};
+    if (aprehendidos.length == 1 && placas.length == 1) {
+      return {placas.first: aprehendidos.first};
+    }
+
+    final mayus = texto.toUpperCase();
+    final resultado = <String, ({String nombre, String cedula})>{};
+    final placasUsadas = <String>{};
+
+    for (final ap in aprehendidos) {
+      final idxNombre = mayus.indexOf(ap.nombre);
+      if (idxNombre == -1) continue;
+      String? mejorPlaca;
+      var mejorDistancia = 1 << 30;
+      for (final placa in placas) {
+        if (placasUsadas.contains(placa)) continue;
+        final idxPlaca = mayus.indexOf(placa);
+        if (idxPlaca == -1) continue;
+        final distancia = (idxPlaca - idxNombre).abs();
+        if (distancia < mejorDistancia) {
+          mejorDistancia = distancia;
+          mejorPlaca = placa;
+        }
+      }
+      if (mejorPlaca != null) {
+        resultado[mejorPlaca] = ap;
+        placasUsadas.add(mejorPlaca);
+      }
+    }
+    return resultado;
+  }
+
+  // ---------- Objetos registrados como indicios (datos técnicos) ----------
+
+  /// Datos técnicos por placa (marca/chasis/país/año) sacados del
+  /// bloque "Objetos registrados como indicios". Solo se extraen ahí
+  /// los campos con un patrón inconfundible (VIN de 17 caracteres para
+  /// chasis, nombre de país conocido, año en rango plausible, marca =
+  /// primera palabra después de la placa) — motor y color quedan
+  /// fuera de este bloque a propósito, ver nota al inicio del archivo.
+  Map<String, Map<String, String>> _extraerIndicios(String texto) {
+    final resultado = <String, Map<String, String>>{};
+    final inicio = RegExp(r'Objetos registrados como indicios', caseSensitive: false).firstMatch(texto);
+    if (inicio == null) return resultado;
+
+    var bloque = texto.substring(inicio.end);
+    final fin = RegExp(r'Garantias b[áa]sicas|Personal polic[íi]al que particip|El agente aprehensor',
+            caseSensitive: false)
+        .firstMatch(bloque);
+    if (fin != null) bloque = bloque.substring(0, fin.start);
+
+    final trozos = bloque.split(RegExp(r'Placa:', caseSensitive: false));
+    for (final trozo in trozos.skip(1)) {
+      final cab = RegExp(r'^\s*([A-Z0-9\- ]{5,10})[\s\n]+([A-ZÁÉÍÓÚÑa-záéíóúñ]{2,20})').firstMatch(trozo);
+      if (cab == null) continue;
+
+      final placa = _normalizarPlaca(cab.group(1)!);
+      if (placa.length < 5) continue;
+      final marca = cab.group(2)!.trim();
+
+      final chasis = _buscar(trozo, RegExp(r'\b([A-HJ-NPR-Z0-9]{17})\b'));
+      final pais = _buscar(
+          trozo,
+          RegExp(
+              r'\b(ECUADOR|JAPON|COLOMBIA|PERU|CHINA|COREA(?:\s*DEL\s*SUR)?|ESTADOS UNIDOS|ALEMANIA|BRASIL|MEXICO|INDIA)\b'));
+      final anios = RegExp(r'\b(19[7-9]\d|20[0-2]\d)\b').allMatches(trozo).map((m) => m.group(1)!).toList();
+      final anio = anios.isEmpty ? null : anios.last;
+
+      resultado[placa] = {
+        'marca': marca,
+        if (chasis != null) 'chasis': chasis,
+        if (pais != null) 'pais': pais,
+        if (anio != null) 'anio': anio,
+      };
+    }
+    return resultado;
+  }
+
+  // ---------- Bloques de participantes/vehículos (narrativa) ----------
+
+  /// Extrae los campos comunes (tipo/marca/color/conductor+cédula/
+  /// propietario+cédula) de un bloque de texto que ya sabemos que
+  /// corresponde a UN vehículo. Tolera etiquetas con o sin dos puntos,
+  /// "Placa"/"Placas", "Color"/"Color principal", etc.
+  Map<String, String> _camposDeBloque(String bloque) {
+    final tipo = _buscar(bloque, RegExp(r'Tipo:?\s*([A-Za-zÁÉÍÓÚáéíóúñÑ ]+?)(?:\n|Marca)'));
+    final marca = _buscar(bloque, RegExp(r'Marca:?\s*([A-Za-zÁÉÍÓÚáéíóúñÑ ]+?)(?:\n|Modelo|Placas?|Color)'));
+    final color = _buscar(
+        bloque, RegExp(r'Color(?:\s*principal)?:?\s*([A-Za-zÁÉÍÓÚáéíóúñÑ ]+?)(?:\n|Placas?|Propietari|Conductor)'));
+
+    final combinado = _buscar(
+        bloque, RegExp(r'Conductor\s*/?\s*y\s*Propietari[oa]\s*([A-Za-zÁÉÍÓÚáéíóúñÑ .]+?)(?:\n|C\.?C)'));
+
+    String conductor = combinado ??
+        _buscar(bloque, RegExp(r'Conductor:?\s*([A-Za-zÁÉÍÓÚáéíóúñÑ .]+?)(?:\s*\(|\n|C\.?C|Propietari)')) ??
+        _buscar(bloque, RegExp(r'Nombres:?\s*([A-Za-zÁÉÍÓÚáéíóúñÑ .]+?)(?:\n|C\.C)')) ??
+        '';
+    String propietario = combinado ??
+        _buscar(bloque, RegExp(r'Propietari[oa]:?\s*([A-Za-zÁÉÍÓÚáéíóúñÑ .]+?)(?:\.|\n|C\.?C|Vehículo|VEHICULO)')) ??
+        '';
+
+    final conductorCedula = _buscar(bloque, RegExp(r'C\.?C\.?:?\s*(\d{9,10})'));
+    final todasLasCedulas = RegExp(r'C\.?C\.?:?\s*(\d{9,10})').allMatches(bloque).map((m) => m.group(1)!).toList();
+    final propietarioCedula =
+        propietario.isNotEmpty && propietario != conductor && todasLasCedulas.length > 1 ? todasLasCedulas[1] : '';
+
+    return {
+      'tipo': tipo ?? '',
+      'marca': marca ?? '',
+      'color': color ?? '',
+      'conductor': conductor,
+      'conductorCedula': conductorCedula ?? '',
+      'propietario': propietario,
+      'propietarioCedula': propietarioCedula,
+    };
   }
 
   List<ParticipanteVehiculo> _extraerPorBloquesParticipante(String texto) {
     final resultado = <ParticipanteVehiculo>[];
-
-    // Cada bloque empieza en "Participante N.° N" — el símbolo exacto
-    // entre "Participante" y el número varía según la plantilla
-    // ("N.°", "N°", "No.", o nada), por eso se acepta cualquier cosa
-    // que no sea un dígito ahí en medio (hasta 15 caracteres).
-    // OJO: se usa "Participante" con mayúscula inicial a propósito,
-    // porque el encabezado de cada vehículo es "Vehículo participante
-    // N.° N" (con minúscula) y así no se confunden entre sí.
     final bloques = texto.split(RegExp(r'Participante[^\d\n]{0,15}\d+'));
 
     for (final bloque in bloques.skip(1)) {
-      final placa = _buscar(bloque, RegExp(r'Placas:\s*([A-Z0-9\-]+)'));
-      if (placa == null) continue;
+      final placaCruda = _buscar(bloque, RegExp(r'Placas?:?\s*([A-Z0-9\- ]{5,10})'));
+      if (placaCruda == null) continue;
+      final placa = _normalizarPlaca(placaCruda);
+      if (placa.length < 5) continue;
 
-      final tipo = _buscar(bloque, RegExp(r'Tipo:\s*([A-Za-zÁÉÍÓÚáéíóúñÑ ]+?)(?:\n|Marca)'));
-      final marca = _buscar(bloque, RegExp(r'Marca:\s*([A-Za-zÁÉÍÓÚáéíóúñÑ ]+?)(?:\n|Placas)'));
-      final color = _buscar(bloque, RegExp(r'Color:\s*([A-Za-zÁÉÍÓÚáéíóúñÑ ]+?)(?:\n|$)'));
-      final conductor = _buscar(bloque, RegExp(r'Nombres:\s*([A-Za-zÁÉÍÓÚáéíóúñÑ .]+?)(?:\n|C\.C)'));
-      final conductorCedula = _buscar(bloque, RegExp(r'C\.C\.?:?\s*(\d{9,10})'));
-
+      final campos = _camposDeBloque(bloque);
       resultado.add(ParticipanteVehiculo(
-        placa: placa.replaceAll(RegExp(r'\s'), '').toUpperCase(),
-        tipo: tipo ?? '',
-        marca: marca ?? '',
-        color: color ?? '',
-        conductor: conductor ?? '',
-        conductorCedula: conductorCedula ?? '',
-        propietario: '',
-        propietarioCedula: '',
+        placa: placa,
+        tipo: campos['tipo']!,
+        marca: campos['marca']!,
+        color: campos['color']!,
+        conductor: campos['conductor']!,
+        conductorCedula: campos['conductorCedula']!,
+        propietario: campos['propietario']!,
+        propietarioCedula: campos['propietarioCedula']!,
       ));
     }
-
     return resultado;
   }
 
-  /// Respaldo cuando la plantilla del PDF no trae "Participante N.° N":
-  /// busca cada ocurrencia de "Placas:" en todo el documento y arma un
-  /// ParticipanteVehiculo mirando ~300 caracteres alrededor de cada
-  /// una (mismo criterio de campos que el método principal).
-  ///
-  /// NOTA: si esto tampoco detecta nada en un PDF real, lo más seguro
-  /// es que ese PDF ni siquiera diga "Placas:" (por ejemplo si es una
-  /// imagen escaneada sin texto seleccionable). En ese caso no hay
-  /// texto que extraer y hay que usar las fotos, tal como ya sugiere
-  /// el aviso en pantalla.
+  List<ParticipanteVehiculo> _extraerPorBloquesVehiculo(String texto) {
+    final resultado = <ParticipanteVehiculo>[];
+    final bloques = texto.split(RegExp(r'\bVEH[IÍ]CULO\s*\d+\b', caseSensitive: false));
+
+    for (final bloque in bloques.skip(1)) {
+      final placaCruda = _buscar(bloque, RegExp(r'Placas?:?\s*([A-Z0-9\- ]{5,10})'));
+      if (placaCruda == null) continue;
+      final placa = _normalizarPlaca(placaCruda);
+      if (placa.length < 5) continue;
+
+      final campos = _camposDeBloque(bloque);
+      resultado.add(ParticipanteVehiculo(
+        placa: placa,
+        tipo: campos['tipo']!,
+        marca: campos['marca']!,
+        color: campos['color']!,
+        conductor: campos['conductor']!,
+        conductorCedula: campos['conductorCedula']!,
+        propietario: campos['propietario']!,
+        propietarioCedula: campos['propietarioCedula']!,
+      ));
+    }
+    return resultado;
+  }
+
   List<ParticipanteVehiculo> _extraerFlexible(String texto) {
     final resultado = <ParticipanteVehiculo>[];
-    final regexPlaca = RegExp(r'Placas?:\s*([A-Z0-9\-]{5,8})');
+    final regexPlaca = RegExp(r'Placas?:?\s*([A-Z0-9\- ]{5,10})');
+    final placasVistas = <String>{};
 
     for (final m in regexPlaca.allMatches(texto)) {
+      final placa = _normalizarPlaca(m.group(1)!);
+      if (placa.length < 5 || !placasVistas.add(placa)) continue;
+
       final inicioVentana = (m.start - 300).clamp(0, texto.length);
       final finVentana = (m.end + 300).clamp(0, texto.length);
       final ventana = texto.substring(inicioVentana, finVentana);
-
-      final placa = m.group(1)!;
-      final tipo = _buscar(ventana, RegExp(r'Tipo:\s*([A-Za-zÁÉÍÓÚáéíóúñÑ ]+?)(?:\n|Marca)'));
-      final marca = _buscar(ventana, RegExp(r'Marca:\s*([A-Za-zÁÉÍÓÚáéíóúñÑ ]+?)(?:\n|Placas)'));
-      final color = _buscar(ventana, RegExp(r'Color:\s*([A-Za-zÁÉÍÓÚáéíóúñÑ ]+?)(?:\n|$)'));
-      final conductor = _buscar(ventana, RegExp(r'Nombres:\s*([A-Za-zÁÉÍÓÚáéíóúñÑ .]+?)(?:\n|C\.C)'));
-      final conductorCedula = _buscar(ventana, RegExp(r'C\.C\.?:?\s*(\d{9,10})'));
+      final campos = _camposDeBloque(ventana);
 
       resultado.add(ParticipanteVehiculo(
-        placa: placa.replaceAll(RegExp(r'\s'), '').toUpperCase(),
-        tipo: tipo ?? '',
-        marca: marca ?? '',
-        color: color ?? '',
-        conductor: conductor ?? '',
-        conductorCedula: conductorCedula ?? '',
-        propietario: '',
-        propietarioCedula: '',
+        placa: placa,
+        tipo: campos['tipo']!,
+        marca: campos['marca']!,
+        color: campos['color']!,
+        conductor: campos['conductor']!,
+        conductorCedula: campos['conductorCedula']!,
+        propietario: campos['propietario']!,
+        propietarioCedula: campos['propietarioCedula']!,
       ));
     }
-
     return resultado;
+  }
+
+  // ---------- Punto de entrada ----------
+
+  /// Detecta cada vehículo del parte y arma un ParticipanteVehiculo por
+  /// cada uno, combinando las tres fuentes: bloques narrativos
+  /// (Participante N / VEHÍCULO N / respaldo flexible) para
+  /// tipo/color/marca, "Objetos registrados como indicios" para
+  /// chasis/país/año, y aprehendidos/detenidos (o circunstancias) para
+  /// el conductor real.
+  List<ParticipanteVehiculo> extraerParticipantes(String texto) {
+    final limpio = _limpiar(texto);
+
+    var lista = _extraerPorBloquesParticipante(limpio);
+    if (lista.isEmpty) lista = _extraerPorBloquesVehiculo(limpio);
+    if (lista.isEmpty) lista = _extraerFlexible(limpio);
+    if (lista.isEmpty) return lista;
+
+    // Enriquecer con marca/chasis/país/año desde "Objetos registrados
+    // como indicios", cuando ese bloque existe.
+    final indicios = _extraerIndicios(limpio);
+    lista = lista.map((p) {
+      final ind = indicios[p.placa];
+      if (ind == null) return p;
+      return p.copyWith(
+        marca: p.marca.isNotEmpty ? p.marca : ind['marca'],
+        chasis: ind['chasis'],
+        pais: ind['pais'],
+        anio: ind['anio'],
+      );
+    }).toList();
+
+    // Conductor real: primero "Información de los aprehendidos", y
+    // si no hay ese bloque, se busca en "Circunstancias del hecho".
+    final aprehendidos = _aprehendidos(limpio);
+    final placas = lista.map((p) => p.placa).toList();
+
+    if (aprehendidos.isNotEmpty) {
+      final asignados = _asignarAprehendidosAPlacas(limpio, aprehendidos, placas);
+      lista = lista.map((p) {
+        final ap = asignados[p.placa];
+        if (ap == null) return p;
+        return p.copyWith(conductor: ap.nombre, conductorCedula: ap.cedula);
+      }).toList();
+    } else if (lista.length == 1 && lista.first.conductor.isEmpty) {
+      final circunstancias = extraerMetadatos(limpio).circunstancias;
+      final encontrado = _conductorEnCircunstancias(circunstancias);
+      if (encontrado != null) {
+        lista[0] = lista[0].copyWith(
+          conductor: encontrado.nombre,
+          conductorCedula: encontrado.cedula ?? lista[0].conductorCedula,
+        );
+      }
+    }
+
+    // Propietario tentativo: si el bloque narrativo no distinguió un
+    // propietario aparte, se usa el mismo dato del conductor como
+    // punto de partida editable (muchas veces coincide, pero puede
+    // cambiar y el casillero queda abierto para corregirlo).
+    lista = lista
+        .map((p) => p.propietario.isNotEmpty
+            ? p
+            : p.copyWith(propietario: p.conductor, propietarioCedula: p.conductorCedula))
+        .toList();
+
+    return lista;
   }
 }

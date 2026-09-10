@@ -9,7 +9,7 @@ import '../models/caso_libertad.dart';
 import '../services/storage_service.dart';
 import 'buscar_placa_screen.dart' show EstadoVehiculoIcon;
 import 'formulario_screen.dart';
-import 'formulario_libertad_screen.dart';
+import 'captura_screen.dart';
 
 /// 02/sep: sello grande tipo "estampado" (rojo = todavía en el patio,
 /// verde = ya liberado) — Xavier pidió aprovechar el espacio libre debajo
@@ -108,7 +108,9 @@ class _DocumentoScreenState extends State<DocumentoScreen> {
   void _liberarVehiculo(CasoIngreso ingreso) {
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => FormularioLibertadScreen(ingreso: ingreso)),
+      MaterialPageRoute(
+        builder: (_) => CapturaScreen(tipo: TipoParte.libertad, ingresoBase: ingreso),
+      ),
     ).then((_) => _cargar());
   }
 
@@ -173,7 +175,9 @@ class _DocumentoScreenState extends State<DocumentoScreen> {
                                           tooltip: 'Editar',
                                           onPressed: () => Navigator.push(
                                             context,
-                                            MaterialPageRoute(builder: (_) => FormularioScreen(casoExistente: c)),
+                                            MaterialPageRoute(
+                                              builder: (_) => FormularioIngresoScreen(caso: c, esEdicion: true),
+                                            ),
                                           ).then((_) => _cargar()),
                                         ),
                                       ],

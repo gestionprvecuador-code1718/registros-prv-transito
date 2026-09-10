@@ -1,6 +1,9 @@
+// RUTA DE ARCHIVO: lib/screens/seleccionar_vehiculo_screen.dart
+
 import 'package:flutter/material.dart';
 import '../models/participante_vehiculo.dart';
 import '../models/caso_ingreso.dart';
+import '../services/pdf_parser_service.dart';
 import 'formulario_screen.dart';
 
 class SeleccionarVehiculoScreen extends StatelessWidget {
@@ -15,14 +18,10 @@ class SeleccionarVehiculoScreen extends StatelessWidget {
 
   void _elegir(BuildContext context, ParticipanteVehiculo p) {
     final id = DateTime.now().millisecondsSinceEpoch.toString();
+    final parser = PdfParserService();
 
-    final novedades = [
-      if (metadatos.parteNo.isNotEmpty) 'Parte Policial N°: ${metadatos.parteNo}',
-      if (metadatos.fechaHecho.isNotEmpty || metadatos.horaHecho.isNotEmpty)
-        'Fecha/hora del hecho: ${metadatos.fechaHecho} ${metadatos.horaHecho}',
+    final observaciones = [
       if (metadatos.direccion.isNotEmpty) 'Lugar: ${metadatos.direccion}',
-      if (metadatos.circunstancias.isNotEmpty) 'Circunstancias: ${metadatos.circunstancias.trim()}',
-      if (metadatos.elaboradoPor.isNotEmpty) 'Elaborado por: ${metadatos.elaboradoPor}',
     ].join('\n');
 
     final caso = CasoIngreso(
@@ -30,12 +29,28 @@ class SeleccionarVehiculoScreen extends StatelessWidget {
       marca: p.marca,
       color: p.color,
       placa: p.placa,
-      propietario: p.propietario.isNotEmpty ? p.propietario : p.conductor,
-      cedulaPropietario: p.propietarioCedula.isNotEmpty ? p.propietarioCedula : p.conductorCedula,
       tipoVehiculo: p.tipo,
-      causa: metadatos.circunstancias.isNotEmpty ? 'Accidente de tránsito' : '',
+      chasis: p.chasis,
+      anioFabricacion: p.anio,
+      // El parser ya deja "propietario" con el mismo dato de
+      // "conductor" cuando el parte no distingue a uno del otro —
+      // igual queda editable en el formulario.
+      propietario: p.propietario,
+      cedulaPropietario: p.propietarioCedula,
+      conductor: p.conductor,
+      cedulaConductor: p.conductorCedula,
+      // "Fecha de retención"/"Hora de retención" en el formulario,
+      // aunque el campo del modelo sigue llamándose fechaIngreso.
       fechaIngreso: metadatos.fechaHecho,
-      novedades: novedades,
+      horaRetencion: metadatos.horaHecho,
+      parteIngresoNro: metadatos.parteNo,
+      causaLegal: parser.sugerirCausaLegal(metadatos.circunstancias),
+      detalleCausa: parser.sugerirDetalleCausa(metadatos.circunstancias),
+      // Ya viene formateado como "Grado. NOMBRE COMPLETO" (ej. "Sgos.
+      // PACA PILCO ANGEL HERIBERTO").
+      policiaNombre: metadatos.elaboradoPor,
+      policiaCedula: metadatos.elaboradoPorCedula,
+      observaciones: observaciones,
     );
 
     Navigator.push(

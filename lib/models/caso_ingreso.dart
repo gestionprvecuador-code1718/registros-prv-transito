@@ -41,6 +41,7 @@ class CasoIngreso {
   String nombreSancionado;
   String cedulaSancionado;
   String resultadoAlcoholemia;
+  String citacionNro;
   // DEPRECADOS (31/ago): "se negó la prueba"/rango automático y el pago
   // de Alcohocheck salen del formulario de Ingreso. Xavier pidió que el
   // pago (orden/comprobante) se registre en la hoja de Libertad, igual
@@ -143,6 +144,7 @@ class CasoIngreso {
     this.nombreSancionado = '',
     this.cedulaSancionado = '',
     this.resultadoAlcoholemia = '',
+    this.citacionNro = '',
     this.rangoAlcoholemia = '',
     this.seNegoPrueba = false,
     this.ordenPagoAlcohocheckNro = '',
@@ -202,6 +204,7 @@ class CasoIngreso {
         'nombreSancionado': nombreSancionado,
         'cedulaSancionado': cedulaSancionado,
         'resultadoAlcoholemia': resultadoAlcoholemia,
+        'citacionNro': citacionNro,
         'rangoAlcoholemia': rangoAlcoholemia,
         'seNegoPrueba': seNegoPrueba,
         'ordenPagoAlcohocheckNro': ordenPagoAlcohocheckNro,
@@ -261,6 +264,7 @@ class CasoIngreso {
         nombreSancionado: j['nombreSancionado'] ?? '',
         cedulaSancionado: j['cedulaSancionado'] ?? '',
         resultadoAlcoholemia: j['resultadoAlcoholemia'] ?? '',
+        citacionNro: j['citacionNro'] ?? '',
         rangoAlcoholemia: j['rangoAlcoholemia'] ?? '',
         seNegoPrueba: j['seNegoPrueba'] ?? false,
         ordenPagoAlcohocheckNro: j['ordenPagoAlcohocheckNro'] ?? '',
@@ -318,6 +322,7 @@ class CasoIngreso {
         'ALCOHOLEMIA_NOMBRE_SANCIONADO': nombreSancionado,
         'ALCOHOLEMIA_CEDULA_SANCIONADO': cedulaSancionado,
         'ALCOHOLEMIA_RESULTADO': aplicaAlcohotest ? '$resultadoAlcoholemia g/L' : 'N/A',
+        'CITACION_NRO': citacionNro,
         'ALCOHOCHECK_ORDEN_PAGO': ordenPagoAlcohocheckNro,
         'ALCOHOCHECK_VALOR': valorAlcohocheck,
         'PROPIETARIO': propietario,

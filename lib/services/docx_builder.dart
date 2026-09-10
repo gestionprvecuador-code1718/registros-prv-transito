@@ -45,7 +45,7 @@ class DocxBuilder {
       if (c.tipoVehiculo != 'MOTOCICLETA' && c.tonelaje.isNotEmpty) 'TONELAJE: ${c.tonelaje} TN',
       'TIPO COBRO PARQUEO: ${c.tipoCobroParqueo}',
       'CAUSA LEGAL: ${c.causaLegal}${c.detalleCausa.isNotEmpty ? ' - ${c.detalleCausa}' : ''}',
-      'PRUEBA DE ALCOHOLEMIA: ${c.aplicaAlcohotest ? 'N° Prueba ${c.numeroPruebaAlcoholemia} - Resultado ${c.resultadoAlcoholemia} g/L - Sancionado: ${c.nombreSancionado} (C.I.: ${c.cedulaSancionado})' : 'NO APLICA'}',
+      'PRUEBA DE ALCOHOLEMIA: ${c.aplicaAlcohotest ? 'N° Prueba ${c.numeroPruebaAlcoholemia} - Resultado ${c.resultadoAlcoholemia} g/L - Sancionado: ${c.nombreSancionado} (C.I.: ${c.cedulaSancionado})${c.citacionNro.isNotEmpty ? ' - Citación N° ${c.citacionNro}' : ''}' : 'NO APLICA'}',
       'PROPIETARIO: ${c.propietario} (C.I.: ${c.cedulaPropietario})',
       'CONDUCTOR: ${c.conductor} (C.I.: ${c.cedulaConductor})',
       'TRASLADO: ${c.traslado}',

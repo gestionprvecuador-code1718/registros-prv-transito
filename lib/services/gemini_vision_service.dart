@@ -18,17 +18,30 @@ class GeminiVisionService {
 
   static const _camposIngreso = [
     'hojaIngresoNro',
+    'parteIngresoNro',
     'crv',
+    'subzona',
     'fechaIngreso',
+    'horaRetencion',
     'tipoVehiculo',
     'marca',
+    'modelo',
+    'anioFabricacion',
     'color',
+    'cilindraje',
+    'chasis',
+    'motor',
     'placa',
     'propietario',
     'cedulaPropietario',
-    'causa',
-    'comoLlego',
-    'tomaProcedimiento',
+    'conductor',
+    'cedulaConductor',
+    'causaLegal',
+    'detalleCausa',
+    'traslado',
+    'custodioRecibeNombre',
+    'policiaNombre',
+    'policiaCedula',
   ];
 
   /// Campos de Libertad — ahora cubren TODOS los documentos posibles:
@@ -74,17 +87,30 @@ Eres un asistente que digitaliza hojas de "RECEPCIÓN DEL VEHÍCULO EN EL PATIO 
 La hoja tiene texto impreso (etiquetas) y datos llenados a mano (a veces con letra cursiva difícil).
 Extrae SOLO los siguientes datos de la parte SUPERIOR de la hoja (ingreso), en JSON, sin explicaciones, sin markdown:
 - hojaIngresoNro: el número impreso en rojo en la esquina superior derecha (7 dígitos aprox., ej. "0002099")
+- parteIngresoNro: número de parte policial, si aparece
 - crv: el nombre del control/CRV (ej. "Control 120")
+- subzona: la subzona si se menciona (ej. "Santo Domingo")
 - fechaIngreso: fecha de ingreso en formato dd/mm/aaaa
-- tipoVehiculo: tipo de vehículo si se menciona (ej. "Plataforma"), si no aparece deja ""
+- horaRetencion: hora de la retención/ingreso si aparece
+- tipoVehiculo: uno de AUTOMÓVIL, CAMIONETA, CAMIÓN, BUS, MOTOCICLETA, PLATAFORMA u OTRO
 - marca: marca del vehículo (ej. "SINOTRUCK")
+- modelo: modelo del vehículo si aparece
+- anioFabricacion: año de fabricación si aparece
 - color: color del vehículo
+- cilindraje: solo si es MOTOCICLETA (ej. "150cc"), si no aplica deja ""
+- chasis: número de chasis/VIN si aparece (no aplica a motocicletas)
+- motor: número de motor si aparece (no aplica a motocicletas)
 - placa: placas del vehículo (formato ecuatoriano, 3 letras + números, ej. "PAD-1978")
 - propietario: nombre completo del propietario
-- cedulaPropietario: número de cédula del propietario. Búscalo primero junto al nombre del propietario en la parte superior; si no aparece ahí, búscalo en la sección inferior "RECIBE CONFORME" o junto a la palabra "Yo" (quien retira el vehículo) — a veces solo está ahí. Si viene de un PDF con varios datos del propietario/conductor, tómalo de esa sección.
-- causa: causa de la detención (ej. "Accidente de tránsito")
-- comoLlego: quién entrega el vehículo / cómo llegó
-- tomaProcedimiento: quién elabora el parte policial (grado y nombre)
+- cedulaPropietario: número de cédula del propietario. Búscalo primero junto al nombre del propietario en la parte superior; si no aparece ahí, búscalo en la sección inferior "RECIBE CONFORME" o junto a la palabra "Yo" (quien retira el vehículo).
+- conductor: nombre del conductor si aparece y es distinto del propietario
+- cedulaConductor: cédula del conductor si aparece
+- causaLegal: una descripción corta de la causa de la detención (ej. "Accidente de tránsito", "Infracción de tránsito")
+- detalleCausa: el detalle textual completo de la causa/artículo, tal como aparece escrito
+- traslado: cómo llegó el vehículo — "SUS PROPIOS MEDIOS", "PARTICULAR" (grúa particular) o "GRÚA POLICIAL"
+- custodioRecibeNombre: quién recibe físicamente la custodia del vehículo
+- policiaNombre: grado y nombre de quien elabora/toma el procedimiento
+- policiaCedula: cédula de quien elabora el procedimiento, si aparece
 Si un dato no aparece o no se puede leer con confianza, usa "" (cadena vacía). NUNCA inventes datos.
 Responde ÚNICAMENTE el objeto JSON con esas claves.''';
 

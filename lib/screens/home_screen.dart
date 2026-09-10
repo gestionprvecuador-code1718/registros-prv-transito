@@ -225,7 +225,7 @@ class HomeScreen extends StatelessWidget {
                       onTap: () => Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => const CapturaScreen(),
+                          builder: (_) => const CapturaScreen(tipo: TipoParte.ingreso),
                         ),
                       ),
                     ),

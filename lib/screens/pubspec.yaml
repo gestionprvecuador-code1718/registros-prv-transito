@@ -61,6 +61,9 @@ dependencies:
   excel: ^4.0.6
   google_generative_ai: ^0.4.7
 
+  # Formateo de fechas (dd/MM/yyyy) en Ingreso y Libertad
+  intl: ^0.19.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
