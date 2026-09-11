@@ -35,6 +35,7 @@ class SeleccionarVehiculoScreen extends StatelessWidget {
     final caso = CasoIngreso(
       id: id,
       marca: p.marca,
+      modelo: p.modelo,
       color: p.color,
       placa: p.placa,
       tipoVehiculo: p.tipo,

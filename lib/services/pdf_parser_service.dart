@@ -126,7 +126,29 @@ class PdfParserService {
     // letra final (ej. KH039Z).
     final moto = RegExp(r'^([A-Z]{1,3}\d{3}[A-Z]?)').firstMatch(limpio);
     if (moto != null) return moto.group(1)!;
-    return limpio;
+    // Si no calza en ninguno de los dos formatos de placa ecuatoriana,
+    // solo se acepta como placa "cruda" si trae al menos un dígito —
+    // una placa real siempre tiene números. Sin este filtro, una
+    // palabra sin números como "CHEVROLET" (la Marca que en el bloque
+    // revuelto de "Objetos registrados como indicios" queda pegada
+    // justo después de la etiqueta "Placa:") se cuela como si fuera
+    // una placa y arma un vehículo fantasma (confirmado en ronda 13:
+    // fue el "3er vehículo" que salió de más en un parte de 2
+    // vehículos reales).
+    return RegExp(r'\d').hasMatch(limpio) ? limpio : '';
+  }
+
+  /// Corre [accion] y, si algo sale mal con una estructura de PDF que
+  /// no se esperaba, devuelve null en vez de tumbar toda la
+  /// extracción — así un casillero raro no impide seguir leyendo el
+  /// resto del parte. Pedido explícito de Xavier en la ronda 13: más
+  /// vale un dato vacío que un parte que "no lee nada".
+  T? _intentar<T>(T Function() accion) {
+    try {
+      return accion();
+    } catch (_) {
+      return null;
+    }
   }
 
   // ---------- Personal policial (jerarquía) ----------
@@ -447,6 +469,7 @@ class PdfParserService {
 
     final trozos = bloque.split(RegExp(r'Objeto en calidad', caseSensitive: false));
     for (final trozo in trozos.skip(1)) {
+      try {
       final chasis = _buscar(trozo, RegExp(r'\b([A-HJ-NPR-Z0-9]{17})\b'));
       final pais = _buscar(
           trozo,
@@ -454,13 +477,36 @@ class PdfParserService {
               r'\b(ECUADOR|JAPON|COLOMBIA|PERU|CHINA|COREA(?:\s*DEL\s*SUR)?|ESTADOS UNIDOS|ALEMANIA|BRASIL|MEXICO|INDIA)\b'));
       final anios = RegExp(r'\b(19[7-9]\d|20[0-2]\d)\b').allMatches(trozo).map((m) => m.group(1)!).toList();
       final anio = anios.isEmpty ? null : anios.last;
+      // Modelo: en este bloque, justo después del separador "Objeto en
+      // calidad" vienen 2 palabras sueltas (el estado, ej. "RETENIDO",
+      // y el tipo de objeto, ej. "CAMION"/"JEEP") y LUEGO el texto del
+      // modelo, hasta la siguiente etiqueta/dato reconocible (color,
+      // VIN, etc.) — confirmado con 2 vehículos reales en la ronda 13
+      // (ej. "RETENIDO JEEP SPORTAGE LX DAB AC 2.0 4P4X2 TM Color
+      // secundario:..." -> Modelo = "SPORTAGE LX DAB AC 2.0 4P4X2 TM").
+      String? modelo;
+      final tokens = trozo.trim().split(RegExp(r'\s+'));
+      if (tokens.length > 2) {
+        final resto = tokens.sublist(2).join(' ');
+        final finModelo = RegExp(
+          r'Color secundario:|\b(BLANCO|NEGRO|ROJO|AZUL|PLATA|PLATEADO|GRIS|AMARILLO|VERDE|CAFE|MARR[OÓ]N|NARANJA|VINO|BEIGE)\b|[A-HJ-NPR-Z0-9]{17}',
+          caseSensitive: false,
+        ).firstMatch(resto);
+        final crudo = finModelo == null ? resto : resto.substring(0, finModelo.start);
+        final recortado = crudo.trim();
+        if (recortado.isNotEmpty) modelo = recortado;
+      }
 
-      if (chasis == null && pais == null && anio == null) continue;
+      if (chasis == null && pais == null && anio == null && modelo == null) continue;
       resultado.add({
         if (chasis != null) 'chasis': chasis,
         if (pais != null) 'pais': pais,
         if (anio != null) 'anio': anio,
+        if (modelo != null) 'modelo': modelo,
       });
+      } catch (_) {
+        continue;
+      }
     }
     return resultado;
   }
@@ -474,6 +520,13 @@ class PdfParserService {
   Map<String, String> _camposDeBloque(String bloque) {
     final tipo = _buscar(bloque, RegExp(r'Tipo:?\s*([A-Za-zÁÉÍÓÚáéíóúñÑ ]+?)(?:\n|Marca)'));
     final marca = _buscar(bloque, RegExp(r'Marca:?\s*([A-Za-zÁÉÍÓÚáéíóúñÑ ]+?)(?:\n|Modelo|Placas?|Color)'));
+    // Modelo directo del bloque narrativo (algunos partes lo traen
+    // ahí, ej. "Modelo: FRTR32M CHASIS TORPEDO..."); admite letras,
+    // números y guiones porque un modelo suele traer cifras (motor,
+    // cilindraje). Si este parte no lo trae aquí, se completa después
+    // con el de "Objetos registrados como indicios" (ver _extraerIndicios).
+    final modelo = _buscar(
+        bloque, RegExp(r'Modelo:?\s*([A-Za-z0-9ÁÉÍÓÚáéíóúñÑ .\-]+?)(?:\n|Color|Placas?)'));
     final color = _buscar(
         bloque, RegExp(r'Color(?:\s*principal)?:?\s*([A-Za-zÁÉÍÓÚáéíóúñÑ ]+?)(?:\n|Placas?|Propietari|Conductor)'));
 
@@ -496,6 +549,7 @@ class PdfParserService {
     return {
       'tipo': tipo ?? '',
       'marca': marca ?? '',
+      'modelo': modelo ?? '',
       'color': color ?? '',
       'conductor': conductor,
       'conductorCedula': conductorCedula ?? '',
@@ -509,22 +563,30 @@ class PdfParserService {
     final bloques = texto.split(RegExp(r'Participante[^\d\n]{0,15}\d+'));
 
     for (final bloque in bloques.skip(1)) {
-      final placaCruda = _buscar(bloque, RegExp(r'Placas?:?\s*([A-Z0-9\- ]{5,10})'));
-      if (placaCruda == null) continue;
-      final placa = _normalizarPlaca(placaCruda);
-      if (placa.length < 5) continue;
+      try {
+        final placaCruda = _buscar(bloque, RegExp(r'Placas?:?\s*([A-Z0-9\- ]{5,10})'));
+        if (placaCruda == null) continue;
+        final placa = _normalizarPlaca(placaCruda);
+        if (placa.length < 5) continue;
 
-      final campos = _camposDeBloque(bloque);
-      resultado.add(ParticipanteVehiculo(
-        placa: placa,
-        tipo: campos['tipo']!,
-        marca: campos['marca']!,
-        color: campos['color']!,
-        conductor: campos['conductor']!,
-        conductorCedula: campos['conductorCedula']!,
-        propietario: campos['propietario']!,
-        propietarioCedula: campos['propietarioCedula']!,
-      ));
+        final campos = _camposDeBloque(bloque);
+        resultado.add(ParticipanteVehiculo(
+          placa: placa,
+          tipo: campos['tipo']!,
+          marca: campos['marca']!,
+          modelo: campos['modelo']!,
+          color: campos['color']!,
+          conductor: campos['conductor']!,
+          conductorCedula: campos['conductorCedula']!,
+          propietario: campos['propietario']!,
+          propietarioCedula: campos['propietarioCedula']!,
+        ));
+      } catch (_) {
+        // Este bloque en particular no se pudo leer bien (estructura
+        // inesperada) — se salta y se sigue con el resto del parte,
+        // en vez de perder todos los vehículos ya encontrados.
+        continue;
+      }
     }
     return resultado;
   }
@@ -534,22 +596,27 @@ class PdfParserService {
     final bloques = texto.split(RegExp(r'\bVEH[IÍ]CULO\s*\d+\b', caseSensitive: false));
 
     for (final bloque in bloques.skip(1)) {
-      final placaCruda = _buscar(bloque, RegExp(r'Placas?:?\s*([A-Z0-9\- ]{5,10})'));
-      if (placaCruda == null) continue;
-      final placa = _normalizarPlaca(placaCruda);
-      if (placa.length < 5) continue;
+      try {
+        final placaCruda = _buscar(bloque, RegExp(r'Placas?:?\s*([A-Z0-9\- ]{5,10})'));
+        if (placaCruda == null) continue;
+        final placa = _normalizarPlaca(placaCruda);
+        if (placa.length < 5) continue;
 
-      final campos = _camposDeBloque(bloque);
-      resultado.add(ParticipanteVehiculo(
-        placa: placa,
-        tipo: campos['tipo']!,
-        marca: campos['marca']!,
-        color: campos['color']!,
-        conductor: campos['conductor']!,
-        conductorCedula: campos['conductorCedula']!,
-        propietario: campos['propietario']!,
-        propietarioCedula: campos['propietarioCedula']!,
-      ));
+        final campos = _camposDeBloque(bloque);
+        resultado.add(ParticipanteVehiculo(
+          placa: placa,
+          tipo: campos['tipo']!,
+          marca: campos['marca']!,
+          modelo: campos['modelo']!,
+          color: campos['color']!,
+          conductor: campos['conductor']!,
+          conductorCedula: campos['conductorCedula']!,
+          propietario: campos['propietario']!,
+          propietarioCedula: campos['propietarioCedula']!,
+        ));
+      } catch (_) {
+        continue;
+      }
     }
     return resultado;
   }
@@ -560,47 +627,31 @@ class PdfParserService {
     final placasVistas = <String>{};
 
     for (final m in regexPlaca.allMatches(texto)) {
-      final placa = _normalizarPlaca(m.group(1)!);
-      if (placa.length < 5 || !placasVistas.add(placa)) continue;
+      try {
+        final placa = _normalizarPlaca(m.group(1)!);
+        if (placa.length < 5 || !placasVistas.add(placa)) continue;
 
-      final inicioVentana = (m.start - 300).clamp(0, texto.length);
-      final finVentana = (m.end + 300).clamp(0, texto.length);
-      final ventana = texto.substring(inicioVentana, finVentana);
-      final campos = _camposDeBloque(ventana);
+        final inicioVentana = (m.start - 300).clamp(0, texto.length);
+        final finVentana = (m.end + 300).clamp(0, texto.length);
+        final ventana = texto.substring(inicioVentana, finVentana);
+        final campos = _camposDeBloque(ventana);
 
-      resultado.add(ParticipanteVehiculo(
-        placa: placa,
-        tipo: campos['tipo']!,
-        marca: campos['marca']!,
-        color: campos['color']!,
-        conductor: campos['conductor']!,
-        conductorCedula: campos['conductorCedula']!,
-        propietario: campos['propietario']!,
-        propietarioCedula: campos['propietarioCedula']!,
-      ));
+        resultado.add(ParticipanteVehiculo(
+          placa: placa,
+          tipo: campos['tipo']!,
+          marca: campos['marca']!,
+          modelo: campos['modelo']!,
+          color: campos['color']!,
+          conductor: campos['conductor']!,
+          conductorCedula: campos['conductorCedula']!,
+          propietario: campos['propietario']!,
+          propietarioCedula: campos['propietarioCedula']!,
+        ));
+      } catch (_) {
+        continue;
+      }
     }
     return resultado;
-  }
-
-  /// Quita el bloque "Objetos registrados como indicios" antes de
-  /// buscar vehículos en el resto del texto. Confirmado con partes
-  /// reales en la ronda 13: justo después de "Placa:" en ese bloque
-  /// queda pegado el valor de "Marca" (ver nota en _extraerIndicios,
-  /// ej. texto real "Placa:CHEVROLET"), y si esa marca tiene entre 5 y
-  /// 10 letras (como "CHEVROLET") el buscador de placas la confunde
-  /// con una placa real y arma un vehículo fantasma de más (fue el
-  /// "3er vehículo" que detectó Xavier probando este mismo parte). Los
-  /// datos técnicos de este bloque ya se sacan aparte con
-  /// _extraerIndicios, así que no hace falta que esté presente aquí.
-  String _quitarBloqueIndicios(String texto) {
-    final inicio = RegExp(r'Objetos registrados como indicios', caseSensitive: false).firstMatch(texto);
-    if (inicio == null) return texto;
-    final resto = texto.substring(inicio.end);
-    final fin = RegExp(r'Garantias b[áa]sicas|Personal polic[íi]al que particip|El agente aprehensor',
-            caseSensitive: false)
-        .firstMatch(resto);
-    final finAbsoluto = fin == null ? texto.length : inicio.end + fin.start;
-    return texto.substring(0, inicio.start) + texto.substring(finAbsoluto);
   }
 
   // ---------- Punto de entrada ----------
@@ -613,26 +664,27 @@ class PdfParserService {
   /// el conductor real.
   List<ParticipanteVehiculo> extraerParticipantes(String texto) {
     final limpio = _limpiar(texto);
-    final sinIndicios = _quitarBloqueIndicios(limpio);
 
-    var lista = _extraerPorBloquesParticipante(sinIndicios);
-    if (lista.isEmpty) lista = _extraerPorBloquesVehiculo(sinIndicios);
-    if (lista.isEmpty) lista = _extraerFlexible(sinIndicios);
+    var lista = _intentar(() => _extraerPorBloquesParticipante(limpio)) ?? [];
+    if (lista.isEmpty) lista = _intentar(() => _extraerPorBloquesVehiculo(limpio)) ?? [];
+    if (lista.isEmpty) lista = _intentar(() => _extraerFlexible(limpio)) ?? [];
     if (lista.isEmpty) return lista;
 
-    // Enriquecer con chasis/país/año desde "Objetos registrados como
-    // indicios", cuando ese bloque existe. Se empareja por POSICIÓN
-    // (el N-ésimo vehículo del bloque de indicios con el N-ésimo
-    // vehículo detectado en el bloque narrativo), no por placa — ver
-    // nota en _extraerIndicios sobre por qué la placa de este bloque
-    // específico no es confiable.
-    final indicios = _extraerIndicios(limpio);
+    // Enriquecer con chasis/país/año/modelo desde "Objetos registrados
+    // como indicios", cuando ese bloque existe. Se empareja por
+    // POSICIÓN (el N-ésimo vehículo del bloque de indicios con el
+    // N-ésimo vehículo detectado en el bloque narrativo), no por placa
+    // — ver nota en _extraerIndicios sobre por qué la placa de este
+    // bloque específico no es confiable. El Modelo solo se toma de acá
+    // si la narrativa no trajo uno ya (ver _camposDeBloque).
+    final indicios = _intentar(() => _extraerIndicios(limpio)) ?? [];
     lista = lista.asMap().entries.map((entry) {
       final i = entry.key;
       final p = entry.value;
       if (i >= indicios.length) return p;
       final ind = indicios[i];
       return p.copyWith(
+        modelo: p.modelo.isNotEmpty ? null : ind['modelo'],
         chasis: ind['chasis'],
         pais: ind['pais'],
         anio: ind['anio'],

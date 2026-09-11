@@ -8,6 +8,7 @@ class ParticipanteVehiculo {
   final String placa;
   final String tipo;
   final String marca;
+  final String modelo;
   final String color;
   final String conductor;
   final String conductorCedula;
@@ -24,6 +25,7 @@ class ParticipanteVehiculo {
     required this.placa,
     this.tipo = '',
     this.marca = '',
+    this.modelo = '',
     this.color = '',
     this.conductor = '',
     this.conductorCedula = '',
@@ -37,6 +39,7 @@ class ParticipanteVehiculo {
   ParticipanteVehiculo copyWith({
     String? tipo,
     String? marca,
+    String? modelo,
     String? color,
     String? conductor,
     String? conductorCedula,
@@ -50,6 +53,7 @@ class ParticipanteVehiculo {
       placa: placa,
       tipo: tipo ?? this.tipo,
       marca: marca ?? this.marca,
+      modelo: modelo ?? this.modelo,
       color: color ?? this.color,
       conductor: conductor ?? this.conductor,
       conductorCedula: conductorCedula ?? this.conductorCedula,

@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../data/causa_legal_catalogo.dart';
 import '../models/caso_ingreso.dart';
 import '../services/storage_service.dart';
@@ -400,6 +401,22 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
     );
   }
 
+  // Misma página de consulta vehicular (AXIS CRV) que ya se abre desde
+  // el botón de la pantalla principal — aquí sirve para que el
+  // oficial revise el tonelaje del vehículo antes de llenar el
+  // casillero de al lado, sin tener que salir a buscar el link.
+  static const _urlConsultaVehiculos = 'https://servicios.axiscloud.ec/CRV/?ps_empresa=02';
+
+  Future<void> _abrirConsultaVehiculos() async {
+    final uri = Uri.parse(_urlConsultaVehiculos);
+    final abierto = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!abierto && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo abrir el navegador.')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -580,7 +597,18 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
             // 12: Tipo de cobro (tonelaje -> autocompleta)
             _seccion('Tipo de cobro', Icons.paid_outlined, [
               if (_tipoVehiculo != 'MOTOCICLETA')
-                _campo(_tonelajeCtrl, 'Tonelaje (TN)', tipo: const TextInputType.numberWithOptions(decimal: true)),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    SizedBox(width: 90, child: _campo(_tonelajeCtrl, 'TN', tipo: const TextInputType.numberWithOptions(decimal: true))),
+                    const SizedBox(width: 8),
+                    IconButton.filledTonal(
+                      onPressed: _abrirConsultaVehiculos,
+                      icon: const Icon(Icons.travel_explore),
+                      tooltip: 'Consultar tonelaje del vehículo (AXIS CRV)',
+                    ),
+                  ],
+                ),
               DropdownButtonFormField<String>(
                 initialValue: _tipoCobroParqueo,
                 isExpanded: true,
