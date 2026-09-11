@@ -2,6 +2,7 @@
 
 import 'dart:typed_data';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
+import '../data/causa_legal_catalogo.dart';
 import '../models/participante_vehiculo.dart';
 
 /// Lee un PDF de "Parte Policial / Noticia del Incidente" (sistema Ecu911).
@@ -46,6 +47,30 @@ class PdfParserService {
     return (valor == null || valor.isEmpty) ? null : valor;
   }
 
+  /// Busca la fecha/hora asociada a una etiqueta, tolerando que
+  /// Syncfusion extraiga esta sección de tabla con TODAS las
+  /// etiquetas juntas primero y TODOS los valores juntos después (en
+  /// vez de "Etiqueta: valor" pegados), confirmado con partes reales
+  /// en la ronda 13 vía "Ver texto reconocido" (por eso "Hora de
+  /// retención" salía vacía pese a que el dato sí estaba en el PDF).
+  /// En vez de exigir el valor pegado a la etiqueta, se toma la
+  /// ventana desde la etiqueta hasta el siguiente encabezado de
+  /// sección y se busca ahí el primer patrón de fecha/hora — es el
+  /// único que hay en esa sección, sin importar cuántas líneas de
+  /// distancia haya.
+  String? _fechaOHoraCercaDeEtiqueta(String texto, RegExp etiqueta, {required bool esHora}) {
+    final m = etiqueta.firstMatch(texto);
+    if (m == null) return null;
+    final resto = texto.substring(m.end);
+    final finBloque = RegExp(
+      r'Informaci[oó]n geogr[áa]fica|Clasificaci[oó]n del lugar|Intersecci[oó]n:',
+      caseSensitive: false,
+    ).firstMatch(resto);
+    final ventana = finBloque == null ? resto.substring(0, resto.length.clamp(0, 600)) : resto.substring(0, finBloque.start);
+    final patron = esHora ? RegExp(r'\d{1,2}:\d{2}') : RegExp(r'\d{2}/\d{2}/\d{4}');
+    return patron.firstMatch(ventana)?.group(0);
+  }
+
   /// Extrae todo el texto del PDF, página por página, a partir de sus bytes.
   String extraerTextoBytes(Uint8List bytes) {
     final documento = PdfDocument(inputBytes: bytes);
@@ -64,7 +89,14 @@ class PdfParserService {
   /// bloque de texto que cruza dos páginas queda partido a la mitad
   /// por ese repetido.
   String _limpiar(String texto) {
-    var t = texto.replaceAll('*', '');
+    // Normaliza CUALQUIER variante de salto de línea (\r\n de Windows,
+    // \r suelto, separadores unicode) a un solo \n ANTES de todo lo
+    // demás. Sin esto, un regex que busca literalmente "\n" para saber
+    // dónde termina un campo se rompe silenciosamente cuando el PDF
+    // real usa \r\n — y lo hace de forma inconsistente (un campo sí
+    // sale, el de al lado no), que es justo lo que se venía viendo.
+    var t = texto.replaceAll(RegExp(r'\r\n|\r|\u2028|\u2029'), '\n');
+    t = t.replaceAll('*', '');
     t = t.replaceAll(
       RegExp(r'Parte\s*No\.?\s*\d+\s*Fecha y hora de impresi[oó]n:\s*\d{2}/\d{2}/\d{4}\s*\d{1,2}:\d{2}'),
       ' ',
@@ -151,7 +183,14 @@ class PdfParserService {
   /// nombre YA con el grado antepuesto: "Sgos. PACA PILCO ANGEL
   /// HERIBERTO".
   ({String nombre, String cedula})? _personalMasAntiguoConCedula(String texto) {
-    final bloque = _unaLinea(_bloquePersonalPolicial(texto) ?? texto);
+    // Si no se encuentra el encabezado del bloque, se prefiere no
+    // buscar en todo el documento (podría toparse con "Parte elevado
+    // al Sr/a", que es a quien se DIRIGE el parte, no quien lo
+    // elabora) — mejor devolver null y dejar que "Realizado por:"
+    // sea el respaldo.
+    final bloqueTexto = _bloquePersonalPolicial(texto);
+    if (bloqueTexto == null) return null;
+    final bloque = _unaLinea(bloqueTexto);
 
     final regexLinea = RegExp(
       r'\b(CRNL|TCRNL|TCNL|MAYR|MYOR|CPTN|TNTE|SBTE|SBOM|SBOP|SBOS|SGOP|SGOS|CBOP|CBOS|POLI)\.?\s+'
@@ -207,8 +246,8 @@ class PdfParserService {
       parteNo: _buscar(t, RegExp(r'Parte Policial No\.?\s*(\d+)')) ??
           _buscar(t, RegExp(r'Parte No\.?\s*(\d+)')) ??
           '',
-      fechaHecho: _buscar(t, RegExp(r'Fecha del Hecho:\s*(\d{2}/\d{2}/\d{4})')) ?? '',
-      horaHecho: _buscar(t, RegExp(r'Hora aproximada del\s*Hecho:\s*(\d{1,2}:\d{2})')) ?? '',
+      fechaHecho: _fechaOHoraCercaDeEtiqueta(t, RegExp(r'Fecha del Hecho:'), esHora: false) ?? '',
+      horaHecho: _fechaOHoraCercaDeEtiqueta(t, RegExp(r'Hora aproximada del\s*Hecho:'), esHora: true) ?? '',
       direccion: _buscar(t, RegExp(r'Direcci[oó]n:\s*([A-Za-zÁÉÍÓÚáéíóúñÑ0-9 ]+?)(?:Intersecci[oó]n|N[uú]mero de Casa)')) ??
           '',
       // El relato del hecho viene bajo la etiqueta "Circunstancias del
@@ -227,28 +266,58 @@ class PdfParserService {
     );
   }
 
-  /// Sugiere una de las opciones fijas de "Causa legal" según palabras
-  /// clave dentro de "Circunstancias del hecho".
+  /// Sugiere una de las opciones REALES de "Causa legal" (catálogo de
+  /// SIIPNE 3W) según palabras clave dentro de "Circunstancias del
+  /// hecho". Devuelve '' si no hay pista clara — mejor dejar que el
+  /// oficial elija a mano que forzar una categoría equivocada.
   String sugerirCausaLegal(String circunstancias) {
     final c = circunstancias.toUpperCase();
-    if (c.contains('EMBRIAGUEZ') || c.contains('ALCOTEST') || c.contains('ALCOHOL')) return 'Infracción de tránsito';
-    if (c.contains('SINIESTRO') || c.contains('CHOQUE') || c.contains('COLISI') || c.contains('ACCIDENTE')) {
-      return 'Accidente de tránsito';
+    if (c.contains('EMBRIAGUEZ') ||
+        c.contains('ALCOTEST') ||
+        c.contains('ALCOHOL') ||
+        c.contains('LLANTA') ||
+        c.contains('LICENCIA') ||
+        c.contains('ESTUPEFACIENTE')) {
+      return 'Contravenciones de Tránsito /Artículos que permiten en el COIP la retención de los vehículos';
     }
-    if (c.contains('ORDEN DE SERVICIO') || c.contains('OPERATIVO')) return 'Operativo de control';
-    if (c.contains('ORDEN JUDICIAL') || c.contains('JUEZ') || c.contains('JUZGADO')) return 'Orden judicial';
-    if (c.contains('FISCAL')) return 'Requerimiento fiscal';
-    return 'Otro';
+    if (c.contains('SINIESTRO') || c.contains('CHOQUE') || c.contains('COLISI') || c.contains('ACCIDENTE')) {
+      return CausaLegalCatalogo.causaAccidenteTransito;
+    }
+    if (c.contains('ORDEN JUDICIAL') || c.contains('JUEZ') || c.contains('JUZGADO') || c.contains('FISCAL')) {
+      return CausaLegalCatalogo.causaOrdenJudicial;
+    }
+    if (c.contains('TOQUE DE QUEDA') || c.contains('SALVOCONDUCTO') || c.contains('RESTRICCIÓN VEHICULAR')) {
+      return 'Acuerdo Ministerial 00004 /ACUERDO MINISTERIAL 10';
+    }
+    if (c.contains('MATRÍCULA') || c.contains('MATRICULA') || c.contains('TÍTULO HABILITANTE') || c.contains('TITULO HABILITANTE')) {
+      return 'Reglamento a la LTTTSV /Artículos del Reglamento de Tránsito que estipulan la retención del vehículo.';
+    }
+    return '';
   }
 
-  /// Arma el "Detalle causa": prioriza la cita textual del artículo
-  /// infringido si aparece ("art. 385 numeral 1..."), y si no hay
-  /// ninguna cita, deja un resumen corto de las circunstancias.
-  String sugerirDetalleCausa(String circunstancias) {
-    final articulo = RegExp(r'art[íi]?culos?\.?\s*\d+[^.]{0,80}', caseSensitive: false).firstMatch(circunstancias);
-    if (articulo != null) return articulo.group(0)!.trim();
-    final resumen = circunstancias.trim();
-    return resumen.length > 300 ? '${resumen.substring(0, 300)}...' : resumen;
+  /// Dentro de las opciones reales de "Detalle causa" para la causa ya
+  /// elegida, busca si "Circunstancias del hecho" menciona un artículo
+  /// (y numeral) que coincida — ej. "art. 385 numeral 1" -> "Artículo
+  /// 385.1". Devuelve null si no hay ninguna coincidencia clara (mejor
+  /// dejar el desplegable en blanco que adivinar mal un artículo).
+  String? sugerirDetalleCausa(String causaLegal, String circunstancias) {
+    final opciones = CausaLegalCatalogo.detalles[causaLegal] ?? [];
+    if (opciones.isEmpty) return null;
+
+    final m = RegExp(r'art[íi]?culos?\.?\s*(\d+)(?:[.\s]*(?:numeral)?\s*(\d))?', caseSensitive: false)
+        .firstMatch(circunstancias);
+    if (m == null) return null;
+    final numeroBase = m.group(1)!;
+    final numeral = m.group(2);
+    final buscado = numeral != null ? '$numeroBase.$numeral' : numeroBase;
+
+    for (final op in opciones) {
+      if (op.toUpperCase().contains('ARTÍCULO $buscado'.toUpperCase())) return op;
+    }
+    for (final op in opciones) {
+      if (op.toUpperCase().contains('ARTÍCULO $numeroBase'.toUpperCase())) return op;
+    }
+    return null;
   }
 
   // ---------- Información de los aprehendidos/detenidos ----------
@@ -345,14 +414,28 @@ class PdfParserService {
 
   // ---------- Objetos registrados como indicios (datos técnicos) ----------
 
-  /// Datos técnicos por placa (marca/chasis/país/año) sacados del
-  /// bloque "Objetos registrados como indicios". Solo se extraen ahí
-  /// los campos con un patrón inconfundible (VIN de 17 caracteres para
-  /// chasis, nombre de país conocido, año en rango plausible, marca =
-  /// primera palabra después de la placa) — motor y color quedan
-  /// fuera de este bloque a propósito, ver nota al inicio del archivo.
-  Map<String, Map<String, String>> _extraerIndicios(String texto) {
-    final resultado = <String, Map<String, String>>{};
+  /// Datos técnicos (chasis/país/año) sacados del bloque "Objetos
+  /// registrados como indicios", UNO por cada vehículo listado ahí.
+  ///
+  /// IMPORTANTE (confirmado con partes reales en la ronda 13, viendo
+  /// el texto real de Syncfusion vía "Ver texto reconocido"): en esta
+  /// sección Syncfusion también revuelve etiquetas y valores — la
+  /// placa real aparece ANTES de la palabra "Placa:", y lo que queda
+  /// pegado justo después de "Placa:" es en realidad el valor de
+  /// "Marca" (ej. texto real: "...GSO9232 Placa: KIA Objeto en
+  /// calidad Objeto: Marca: Modelo:..."). Por eso NO se intenta leer
+  /// la placa ni la marca de este bloque (antes se leía mal y
+  /// contaminaba el cruce de datos con una placa falsa como
+  /// "CHEVROLET"). En vez de eso, cada entrada de vehículo dentro de
+  /// este bloque se reconoce por el separador fijo "Objeto en
+  /// calidad" (uno por vehículo, en el MISMO ORDEN en que aparecen los
+  /// vehículos en el bloque narrativo), y ahí dentro solo se sacan
+  /// chasis/país/año con patrones inconfundibles que no dependen del
+  /// orden (VIN de 17 caracteres, nombre de país conocido, año en
+  /// rango plausible) — motor y color quedan fuera a propósito, ver
+  /// nota al inicio del archivo.
+  List<Map<String, String>> _extraerIndicios(String texto) {
+    final resultado = <Map<String, String>>[];
     final inicio = RegExp(r'Objetos registrados como indicios', caseSensitive: false).firstMatch(texto);
     if (inicio == null) return resultado;
 
@@ -362,15 +445,8 @@ class PdfParserService {
         .firstMatch(bloque);
     if (fin != null) bloque = bloque.substring(0, fin.start);
 
-    final trozos = bloque.split(RegExp(r'Placa:', caseSensitive: false));
+    final trozos = bloque.split(RegExp(r'Objeto en calidad', caseSensitive: false));
     for (final trozo in trozos.skip(1)) {
-      final cab = RegExp(r'^\s*([A-Z0-9\- ]{5,10})[\s\n]+([A-ZÁÉÍÓÚÑa-záéíóúñ]{2,20})').firstMatch(trozo);
-      if (cab == null) continue;
-
-      final placa = _normalizarPlaca(cab.group(1)!);
-      if (placa.length < 5) continue;
-      final marca = cab.group(2)!.trim();
-
       final chasis = _buscar(trozo, RegExp(r'\b([A-HJ-NPR-Z0-9]{17})\b'));
       final pais = _buscar(
           trozo,
@@ -379,12 +455,12 @@ class PdfParserService {
       final anios = RegExp(r'\b(19[7-9]\d|20[0-2]\d)\b').allMatches(trozo).map((m) => m.group(1)!).toList();
       final anio = anios.isEmpty ? null : anios.last;
 
-      resultado[placa] = {
-        'marca': marca,
+      if (chasis == null && pais == null && anio == null) continue;
+      resultado.add({
         if (chasis != null) 'chasis': chasis,
         if (pais != null) 'pais': pais,
         if (anio != null) 'anio': anio,
-      };
+      });
     }
     return resultado;
   }
@@ -506,6 +582,27 @@ class PdfParserService {
     return resultado;
   }
 
+  /// Quita el bloque "Objetos registrados como indicios" antes de
+  /// buscar vehículos en el resto del texto. Confirmado con partes
+  /// reales en la ronda 13: justo después de "Placa:" en ese bloque
+  /// queda pegado el valor de "Marca" (ver nota en _extraerIndicios,
+  /// ej. texto real "Placa:CHEVROLET"), y si esa marca tiene entre 5 y
+  /// 10 letras (como "CHEVROLET") el buscador de placas la confunde
+  /// con una placa real y arma un vehículo fantasma de más (fue el
+  /// "3er vehículo" que detectó Xavier probando este mismo parte). Los
+  /// datos técnicos de este bloque ya se sacan aparte con
+  /// _extraerIndicios, así que no hace falta que esté presente aquí.
+  String _quitarBloqueIndicios(String texto) {
+    final inicio = RegExp(r'Objetos registrados como indicios', caseSensitive: false).firstMatch(texto);
+    if (inicio == null) return texto;
+    final resto = texto.substring(inicio.end);
+    final fin = RegExp(r'Garantias b[áa]sicas|Personal polic[íi]al que particip|El agente aprehensor',
+            caseSensitive: false)
+        .firstMatch(resto);
+    final finAbsoluto = fin == null ? texto.length : inicio.end + fin.start;
+    return texto.substring(0, inicio.start) + texto.substring(finAbsoluto);
+  }
+
   // ---------- Punto de entrada ----------
 
   /// Detecta cada vehículo del parte y arma un ParticipanteVehiculo por
@@ -516,20 +613,26 @@ class PdfParserService {
   /// el conductor real.
   List<ParticipanteVehiculo> extraerParticipantes(String texto) {
     final limpio = _limpiar(texto);
+    final sinIndicios = _quitarBloqueIndicios(limpio);
 
-    var lista = _extraerPorBloquesParticipante(limpio);
-    if (lista.isEmpty) lista = _extraerPorBloquesVehiculo(limpio);
-    if (lista.isEmpty) lista = _extraerFlexible(limpio);
+    var lista = _extraerPorBloquesParticipante(sinIndicios);
+    if (lista.isEmpty) lista = _extraerPorBloquesVehiculo(sinIndicios);
+    if (lista.isEmpty) lista = _extraerFlexible(sinIndicios);
     if (lista.isEmpty) return lista;
 
-    // Enriquecer con marca/chasis/país/año desde "Objetos registrados
-    // como indicios", cuando ese bloque existe.
+    // Enriquecer con chasis/país/año desde "Objetos registrados como
+    // indicios", cuando ese bloque existe. Se empareja por POSICIÓN
+    // (el N-ésimo vehículo del bloque de indicios con el N-ésimo
+    // vehículo detectado en el bloque narrativo), no por placa — ver
+    // nota en _extraerIndicios sobre por qué la placa de este bloque
+    // específico no es confiable.
     final indicios = _extraerIndicios(limpio);
-    lista = lista.map((p) {
-      final ind = indicios[p.placa];
-      if (ind == null) return p;
+    lista = lista.asMap().entries.map((entry) {
+      final i = entry.key;
+      final p = entry.value;
+      if (i >= indicios.length) return p;
+      final ind = indicios[i];
       return p.copyWith(
-        marca: p.marca.isNotEmpty ? p.marca : ind['marca'],
         chasis: ind['chasis'],
         pais: ind['pais'],
         anio: ind['anio'],

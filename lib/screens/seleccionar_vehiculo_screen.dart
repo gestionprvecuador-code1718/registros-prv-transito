@@ -9,11 +9,16 @@ import 'formulario_screen.dart';
 class SeleccionarVehiculoScreen extends StatelessWidget {
   final List<ParticipanteVehiculo> participantes;
   final MetadatosParte metadatos;
+  // Texto crudo que extrajo el PDF, tal cual — se reenvía al
+  // formulario para poder revisarlo con "Ver texto reconocido" cuando
+  // algo no se extrajo bien, en vez de adivinar a ciegas.
+  final String? textoCompleto;
 
   const SeleccionarVehiculoScreen({
     super.key,
     required this.participantes,
     required this.metadatos,
+    this.textoCompleto,
   });
 
   void _elegir(BuildContext context, ParticipanteVehiculo p) {
@@ -23,6 +28,9 @@ class SeleccionarVehiculoScreen extends StatelessWidget {
     final observaciones = [
       if (metadatos.direccion.isNotEmpty) 'Lugar: ${metadatos.direccion}',
     ].join('\n');
+
+    final causaLegal = parser.sugerirCausaLegal(metadatos.circunstancias);
+    final detalleCausa = parser.sugerirDetalleCausa(causaLegal, metadatos.circunstancias) ?? '';
 
     final caso = CasoIngreso(
       id: id,
@@ -44,8 +52,8 @@ class SeleccionarVehiculoScreen extends StatelessWidget {
       fechaIngreso: metadatos.fechaHecho,
       horaRetencion: metadatos.horaHecho,
       parteIngresoNro: metadatos.parteNo,
-      causaLegal: parser.sugerirCausaLegal(metadatos.circunstancias),
-      detalleCausa: parser.sugerirDetalleCausa(metadatos.circunstancias),
+      causaLegal: causaLegal,
+      detalleCausa: detalleCausa,
       // Ya viene formateado como "Grado. NOMBRE COMPLETO" (ej. "Sgos.
       // PACA PILCO ANGEL HERIBERTO").
       policiaNombre: metadatos.elaboradoPor,
@@ -55,7 +63,7 @@ class SeleccionarVehiculoScreen extends StatelessWidget {
 
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => FormularioIngresoScreen(caso: caso)),
+      MaterialPageRoute(builder: (_) => FormularioIngresoScreen(caso: caso, textoOcr: textoCompleto)),
     );
   }
 

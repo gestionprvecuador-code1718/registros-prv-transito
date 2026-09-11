@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
+import '../data/causa_legal_catalogo.dart';
 import '../models/caso_ingreso.dart';
 import '../services/storage_service.dart';
 import '../widgets/campo_autocompletable.dart';
@@ -67,21 +68,6 @@ class FormularioIngresoScreen extends StatefulWidget {
 
 const _tiposVehiculo = ['AUTOMÓVIL', 'CAMIONETA', 'CAMIÓN', 'BUS', 'MOTOCICLETA', 'PLATAFORMA', 'OTRO'];
 
-// NOTA: catálogo genérico de causas legales — Xavier pidió reemplazar
-// esto por el listado real de artículos (383/384/385.1-4/386.1/
-// 386.i2.1/386.i2.2 + 160/177 del reglamento) en una ronda anterior;
-// falta que comparta el texto exacto de cada artículo para
-// completarlo (ver notas del proyecto). Mientras tanto, "Detalle
-// causa" queda libre para escribir el artículo exacto a mano.
-const _causasLegales = [
-  'Accidente de tránsito',
-  'Infracción de tránsito',
-  'Orden judicial',
-  'Requerimiento fiscal',
-  'Operativo de control',
-  'Otro',
-];
-
 const _tiposCobroParqueo = ['LIVIANO', 'PESADO', 'MOTOCICLETA', 'EXTRAPESADO'];
 
 const _tiposTraslado = ['SUS PROPIOS MEDIOS', 'PARTICULAR', 'GRÚA POLICIAL'];
@@ -99,7 +85,7 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
   final _cedulaPropietarioCtrl = TextEditingController();
   final _conductorCtrl = TextEditingController();
   final _cedulaConductorCtrl = TextEditingController();
-  final _detalleCausaCtrl = TextEditingController();
+  final _detalleCausaCtrl = TextEditingController(); // solo se usa para "N° de Orden" (Orden Judicial)
   final _placaCtrl = TextEditingController();
   final _colorCtrl = TextEditingController();
   final _motorCtrl = TextEditingController();
@@ -128,7 +114,8 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
 
   String _tipoVehiculo = 'AUTOMÓVIL';
   String _tipoOperativo = 'SIN OPERATIVO';
-  String _causaLegal = 'Accidente de tránsito';
+  String _causaLegal = '';
+  String? _detalleCausaSeleccionado;
   String? _tipoCobroParqueo;
   String _traslado = 'SUS PROPIOS MEDIOS';
   bool _aplicaAlcohotest = false;
@@ -154,7 +141,16 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
     _cedulaPropietarioCtrl.text = _caso.cedulaPropietario;
     _conductorCtrl.text = _caso.conductor;
     _cedulaConductorCtrl.text = _caso.cedulaConductor;
-    _detalleCausaCtrl.text = _caso.detalleCausa;
+    // "Detalle causa" se reconstruye según la causa legal elegida:
+    // si la causa ya trae desplegable, el valor guardado debería ser
+    // una de esas opciones; si no, es el N° de Orden que se escribió
+    // a mano.
+    if (CausaLegalCatalogo.tieneDesplegable(_caso.causaLegal) &&
+        (CausaLegalCatalogo.detalles[_caso.causaLegal] ?? []).contains(_caso.detalleCausa)) {
+      _detalleCausaSeleccionado = _caso.detalleCausa;
+    } else if (_caso.causaLegal != CausaLegalCatalogo.causaAccidenteTransito) {
+      _detalleCausaCtrl.text = _caso.detalleCausa;
+    }
     _placaCtrl.text = _caso.placa;
     _colorCtrl.text = _caso.color;
     _motorCtrl.text = _caso.motor;
@@ -187,7 +183,7 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
 
     _tipoVehiculo = _tiposVehiculo.contains(_caso.tipoVehiculo) ? _caso.tipoVehiculo : 'AUTOMÓVIL';
     _tipoOperativo = _caso.tipoOperativo.isEmpty ? 'SIN OPERATIVO' : _caso.tipoOperativo;
-    _causaLegal = _causasLegales.contains(_caso.causaLegal) ? _caso.causaLegal : 'Accidente de tránsito';
+    _causaLegal = CausaLegalCatalogo.causas.contains(_caso.causaLegal) ? _caso.causaLegal : '';
     _tipoCobroParqueo = _tiposCobroParqueo.contains(_caso.tipoCobroParqueo) ? _caso.tipoCobroParqueo : null;
     _traslado = _tiposTraslado.contains(_caso.traslado) ? _caso.traslado : 'SUS PROPIOS MEDIOS';
     _aplicaAlcohotest = _caso.aplicaAlcohotest;
@@ -282,7 +278,11 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
       ..tonelaje = _tipoVehiculo == 'MOTOCICLETA' ? '' : _tonelajeCtrl.text.trim()
       ..tipoCobroParqueo = _tipoCobroParqueo ?? ''
       ..causaLegal = _causaLegal
-      ..detalleCausa = _detalleCausaCtrl.text.trim()
+      ..detalleCausa = _causaLegal == CausaLegalCatalogo.causaAccidenteTransito
+          ? _causaLegal
+          : (CausaLegalCatalogo.tieneDesplegable(_causaLegal)
+              ? (_detalleCausaSeleccionado ?? '')
+              : _detalleCausaCtrl.text.trim())
       ..custodioRecibeNombre = _custodioRecibeCtrl.text.trim()
       ..policiaNombre = _policiaNombreCtrl.text.trim()
       ..policiaCedula = _policiaCedulaCtrl.text.trim()
@@ -418,10 +418,11 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            // 1-3: Tipo operativo / Fecha / Hora de retención (+
-            // subzona/CRV, que no tienen un lugar fijo en el orden que
-            // dio Xavier — quedan aquí por ser también "datos
-            // generales" del ingreso).
+            // 1-3: Tipo operativo / Fecha / Hora de retención. Subzona
+            // y CRV se quitaron de la pantalla (Xavier pidió
+            // ocultarlos, no borrarlos) — se siguen guardando con lo
+            // que ya traían (perfil del usuario / lo último usado) y
+            // se usan igual al generar el Word.
             _seccion('Datos del ingreso', Icons.assignment_outlined, [
               DropdownButtonFormField<String>(
                 initialValue: _tipoOperativo,
@@ -436,8 +437,6 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
               if (_tipoOperativo == 'OPERATIVO N°') _campo(_tipoOperativoNroCtrl, 'Número de operativo'),
               _campo(_fechaCtrl, 'Fecha de retención (dd/mm/aaaa)', requerido: true),
               _campo(_horaCtrl, 'Hora de retención'),
-              CampoAutocompletable(etiqueta: 'Subzona', claveAlmacenamiento: 'ingreso_subzona', controller: _subzonaCtrl),
-              CampoAutocompletable(etiqueta: 'CRV / Control', claveAlmacenamiento: 'ingreso_crv', controller: _crvCtrl),
             ]),
             // 4: Personal que toma procedimiento
             _seccion('Personal que toma procedimiento', Icons.local_police_outlined, [
@@ -478,16 +477,45 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
                 controller: _cedulaConductorCtrl,
               ),
             ]),
-            // 7: Causa legal -> Detalle de la causa
+            // 7: Causa legal -> Detalle de la causa (catálogo real de
+            // SIIPNE 3W). Según la causa elegida, "Detalle causa"
+            // cambia de comportamiento: Accidente de Tránsito no
+            // necesita nada más (se autocompleta con la misma causa),
+            // Orden Judicial pide el N° de Orden a mano, y el resto
+            // muestra su propio desplegable de artículos.
             _seccion('Causa legal', Icons.gavel_outlined, [
               DropdownButtonFormField<String>(
-                initialValue: _causaLegal,
+                initialValue: _causaLegal.isEmpty ? null : _causaLegal,
                 isExpanded: true,
                 decoration: const InputDecoration(labelText: 'Causa legal', border: OutlineInputBorder(), isDense: true),
-                items: _causasLegales.map((c) => DropdownMenuItem(value: c, child: Text(c, overflow: TextOverflow.ellipsis))).toList(),
-                onChanged: (v) => setState(() => _causaLegal = v ?? 'Accidente de tránsito'),
+                hint: const Text('Seleccione causa'),
+                items: CausaLegalCatalogo.causas
+                    .map((c) => DropdownMenuItem(value: c, child: Text(c, overflow: TextOverflow.ellipsis)))
+                    .toList(),
+                onChanged: (v) => setState(() {
+                  _causaLegal = v ?? '';
+                  _detalleCausaSeleccionado = null;
+                  _detalleCausaCtrl.clear();
+                }),
+                validator: (v) => (v == null || v.isEmpty) ? 'Requerido' : null,
               ),
-              _campo(_detalleCausaCtrl, 'Detalle causa (artículo exacto)', lineas: 3),
+              if (_causaLegal == CausaLegalCatalogo.causaOrdenJudicial)
+                _campo(_detalleCausaCtrl, 'N° de Orden', requerido: true)
+              else if (CausaLegalCatalogo.tieneDesplegable(_causaLegal))
+                DropdownButtonFormField<String>(
+                  initialValue: _detalleCausaSeleccionado,
+                  isExpanded: true,
+                  decoration:
+                      const InputDecoration(labelText: 'Detalle causa', border: OutlineInputBorder(), isDense: true),
+                  hint: const Text('Seleccione opción'),
+                  items: (CausaLegalCatalogo.detalles[_causaLegal] ?? [])
+                      .map((d) => DropdownMenuItem(value: d, child: Text(d, overflow: TextOverflow.ellipsis)))
+                      .toList(),
+                  onChanged: (v) => setState(() => _detalleCausaSeleccionado = v),
+                  validator: (v) => (v == null || v.isEmpty) ? 'Requerido' : null,
+                ),
+              // Accidente de Tránsito no muestra nada más: su detalle
+              // es la misma causa elegida arriba.
             ]),
             // 8: Datos del vehículo
             _seccion('Datos del vehículo', Icons.directions_car_outlined, [

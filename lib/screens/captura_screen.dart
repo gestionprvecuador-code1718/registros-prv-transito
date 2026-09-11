@@ -80,7 +80,7 @@ class _CapturaScreenState extends State<CapturaScreen> {
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => SeleccionarVehiculoScreen(participantes: participantes, metadatos: metadatos),
+          builder: (_) => SeleccionarVehiculoScreen(participantes: participantes, metadatos: metadatos, textoCompleto: texto),
         ),
       );
     } catch (e) {
