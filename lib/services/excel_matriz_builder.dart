@@ -243,9 +243,9 @@ class ExcelMatrizBuilder {
         TextCellValue(ing.causaLegal.isNotEmpty
             ? '${ing.causaLegal} - ${ing.detalleCausa}'
             : '${ing.causaPrincipal} - ${ing.submotivoFalta}'),
-        TextCellValue(ing.autoridadRequirente),
+        TextCellValue(ing.autoridadRequirente.isNotEmpty ? ing.autoridadRequirente : 'NO APLICA'),
         TextCellValue(lib?.placaGrua ?? ''),
-        TextCellValue(ing.conductorGrua),
+        TextCellValue(ing.conductorGrua.isNotEmpty ? ing.conductorGrua : 'NO APLICA'),
         TextCellValue(ing.custodioRecibeNombre),
         TextCellValue(lib?.fechaSalida ?? ''),
         TextCellValue(lib?.oficioDevolucionNro ?? ''),

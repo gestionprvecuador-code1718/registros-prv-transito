@@ -45,6 +45,7 @@ class DocxBuilder {
       if (c.tipoVehiculo != 'MOTOCICLETA' && c.tonelaje.isNotEmpty) 'TONELAJE: ${c.tonelaje} TN',
       'TIPO COBRO PARQUEO: ${c.tipoCobroParqueo}',
       'CAUSA LEGAL: ${c.causaLegal}${c.detalleCausa.isNotEmpty ? ' - ${c.detalleCausa}' : ''}',
+      'AUTORIDAD QUE CONOCE: ${c.autoridadRequirente}',
       'PRUEBA DE ALCOHOLEMIA: ${c.aplicaAlcohotest ? 'N° Prueba ${c.numeroPruebaAlcoholemia} - Resultado ${c.resultadoAlcoholemia} g/L - Sancionado: ${c.nombreSancionado} (C.I.: ${c.cedulaSancionado})${c.citacionNro.isNotEmpty ? ' - Citación N° ${c.citacionNro}' : ''}' : 'NO APLICA'}',
       'PROPIETARIO: ${c.propietario} (C.I.: ${c.cedulaPropietario})',
       'CONDUCTOR: ${c.conductor} (C.I.: ${c.cedulaConductor})',
@@ -52,6 +53,8 @@ class DocxBuilder {
       if (c.traslado == 'PARTICULAR')
         'GRÚA PARTICULAR: ${c.nombreGruaParticular} - Tel: ${c.telefonoGruaParticular} - Valor: \$${c.valorGrua}',
       if (c.traslado == 'GRÚA POLICIAL' && c.kmGrua.isNotEmpty) 'KM. GRÚA POLICIAL: ${c.kmGrua}',
+      if (c.traslado == 'GRÚA POLICIAL' && c.conductorGrua.isNotEmpty)
+        'CONDUCTOR DE LA GRÚA: ${c.conductorGrua}',
       'RECIBE LA CUSTODIA: ${c.custodioRecibeNombre}',
       'PARTE ELABORADO POR: ${c.policiaNombre} (C.I.: ${c.policiaCedula})',
       'ESTADO FÍSICO: ${c.estadoVehiculo}',

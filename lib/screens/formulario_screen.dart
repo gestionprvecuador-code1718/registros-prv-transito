@@ -2,7 +2,6 @@
 
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -28,23 +27,6 @@ void _verTextoOcr(BuildContext context, String? texto) {
         ),
       ),
       actions: [
-        // Copia el texto completo al portapapeles — pensado para poder
-        // pegarlo directo en un mensaje/chat cuando algo no se extrae
-        // bien, en vez de tener que mandar una captura de pantalla.
-        TextButton.icon(
-          onPressed: (texto == null || texto.trim().isEmpty)
-              ? null
-              : () async {
-                  await Clipboard.setData(ClipboardData(text: texto));
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Texto copiado al portapapeles')),
-                    );
-                  }
-                },
-          icon: const Icon(Icons.copy),
-          label: const Text('Copiar'),
-        ),
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cerrar')),
       ],
     ),
@@ -117,6 +99,7 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
   final _hojaCtrl = TextEditingController(); // "Formulario N°"
   final _parteCtrl = TextEditingController(); // "N° de Parte Web (Ingreso)"
   final _kmGruaCtrl = TextEditingController();
+  final _conductorGruaCtrl = TextEditingController();
   final _valorGruaCtrl = TextEditingController();
   final _nombreGruaParticularCtrl = TextEditingController();
   final _telefonoGruaParticularCtrl = TextEditingController();
@@ -130,6 +113,10 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
   final _subzonaCtrl = TextEditingController();
   final _crvCtrl = TextEditingController();
   final _observacionesCtrl = TextEditingController();
+  // Autoridad que conoce el caso: se autollena según la causa legal
+  // (Accidente de Tránsito -> FISCALÍA, cualquier otra causa -> NO
+  // APLICA), pero siempre queda editable a mano.
+  final _autoridadRequirenteCtrl = TextEditingController();
 
   String _tipoVehiculo = 'AUTOMÓVIL';
   String _tipoOperativo = 'SIN OPERATIVO';
@@ -182,6 +169,7 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
     _hojaCtrl.text = _caso.hojaIngresoNro;
     _parteCtrl.text = _caso.parteIngresoNro;
     _kmGruaCtrl.text = _caso.kmGrua;
+    _conductorGruaCtrl.text = _caso.conductorGrua;
     _valorGruaCtrl.text = _caso.valorGrua;
     _nombreGruaParticularCtrl.text = _caso.nombreGruaParticular;
     _telefonoGruaParticularCtrl.text = _caso.telefonoGruaParticular;
@@ -199,6 +187,13 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
     _subzonaCtrl.text = _caso.subzona;
     _crvCtrl.text = _caso.crv.isEmpty ? 'Control 120' : _caso.crv;
     _observacionesCtrl.text = _caso.observaciones;
+    // Si ya hay un valor guardado (caso existente/edición) se respeta
+    // tal cual, aunque no coincida con la regla — es editable a mano.
+    // Si es un caso nuevo (nunca se guardó nada), se autollena según
+    // la causa legal ya cargada arriba.
+    _autoridadRequirenteCtrl.text = _caso.autoridadRequirente.isNotEmpty
+        ? _caso.autoridadRequirente
+        : (_caso.causaLegal == CausaLegalCatalogo.causaAccidenteTransito ? 'FISCALÍA' : 'NO APLICA');
 
     _tipoVehiculo = _tiposVehiculo.contains(_caso.tipoVehiculo) ? _caso.tipoVehiculo : 'AUTOMÓVIL';
     _tipoOperativo = _caso.tipoOperativo.isEmpty ? 'SIN OPERATIVO' : _caso.tipoOperativo;
@@ -216,10 +211,10 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
       _tipoOperativoNroCtrl, _fechaCtrl, _horaCtrl, _policiaNombreCtrl, _policiaCedulaCtrl,
       _propietarioCtrl, _cedulaPropietarioCtrl, _conductorCtrl, _cedulaConductorCtrl, _detalleCausaCtrl,
       _placaCtrl, _colorCtrl, _motorCtrl, _chasisCtrl, _marcaCtrl, _modeloCtrl, _anioCtrl,
-      _cilindrajeCtrl, _estadoVehiculoCtrl, _hojaCtrl, _parteCtrl, _kmGruaCtrl, _valorGruaCtrl,
+      _cilindrajeCtrl, _estadoVehiculoCtrl, _hojaCtrl, _parteCtrl, _kmGruaCtrl, _conductorGruaCtrl, _valorGruaCtrl,
       _nombreGruaParticularCtrl, _telefonoGruaParticularCtrl, _tonelajeCtrl, _nombreSancionadoCtrl,
       _cedulaSancionadoCtrl, _numeroPruebaCtrl, _resultadoAlcoholemiaCtrl, _citacionCtrl,
-      _custodioRecibeCtrl, _subzonaCtrl, _crvCtrl, _observacionesCtrl,
+      _custodioRecibeCtrl, _subzonaCtrl, _crvCtrl, _observacionesCtrl, _autoridadRequirenteCtrl,
     ]) {
       c.dispose();
     }
@@ -291,6 +286,8 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
       ..cedulaConductor = _cedulaConductorCtrl.text.trim()
       ..traslado = _traslado
       ..kmGrua = _traslado == 'GRÚA POLICIAL' ? _kmGruaCtrl.text.trim() : ''
+      ..conductorGrua = _traslado == 'GRÚA POLICIAL' ? _conductorGruaCtrl.text.trim() : ''
+      ..autoridadRequirente = _autoridadRequirenteCtrl.text.trim()
       ..valorGrua = _traslado == 'PARTICULAR' ? _valorGruaCtrl.text.trim() : ''
       ..nombreGruaParticular = _traslado == 'PARTICULAR' ? _nombreGruaParticularCtrl.text.trim() : ''
       ..telefonoGruaParticular = _traslado == 'PARTICULAR' ? _telefonoGruaParticularCtrl.text.trim() : ''
@@ -531,6 +528,8 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
                   _causaLegal = v ?? '';
                   _detalleCausaSeleccionado = null;
                   _detalleCausaCtrl.clear();
+                  _autoridadRequirenteCtrl.text =
+                      _causaLegal == CausaLegalCatalogo.causaAccidenteTransito ? 'FISCALÍA' : 'NO APLICA';
                 }),
                 validator: (v) => (v == null || v.isEmpty) ? 'Requerido' : null,
               ),
@@ -551,6 +550,7 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
                 ),
               // Accidente de Tránsito no muestra nada más: su detalle
               // es la misma causa elegida arriba.
+              _campo(_autoridadRequirenteCtrl, 'Autoridad que conoce'),
             ]),
             // 8: Datos del vehículo
             _seccion('Datos del vehículo', Icons.directions_car_outlined, [
@@ -597,7 +597,10 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
                 items: _tiposTraslado.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
                 onChanged: (v) => setState(() => _traslado = v ?? 'SUS PROPIOS MEDIOS'),
               ),
-              if (_traslado == 'GRÚA POLICIAL') _campo(_kmGruaCtrl, 'Km. grúa policial'),
+              if (_traslado == 'GRÚA POLICIAL') ...[
+                _campo(_kmGruaCtrl, 'Km. grúa policial'),
+                _campo(_conductorGruaCtrl, 'Nombre del conductor de la grúa'),
+              ],
               if (_traslado == 'PARTICULAR') ...[
                 CampoAutocompletable(
                   etiqueta: 'Nombre de la grúa particular',
@@ -762,6 +765,7 @@ class _VistaPreviaIngresoScreen extends StatelessWidget {
           _tarjeta('Causa legal', [
             _fila('Causa', caso.causaLegal),
             _fila('Detalle', caso.detalleCausa),
+            _fila('Autoridad que conoce', caso.autoridadRequirente),
           ]),
           _tarjeta('Vehículo', [
             _fila('Tipo', caso.tipoVehiculo),
@@ -776,6 +780,7 @@ class _VistaPreviaIngresoScreen extends StatelessWidget {
           ]),
           _tarjeta('Trasladado por', [
             _fila('Traslado', caso.traslado),
+            _fila('Conductor de la grúa', caso.conductorGrua),
             _fila('Grúa particular', caso.nombreGruaParticular),
           ]),
           _tarjeta('Tipo de cobro', [
