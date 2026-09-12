@@ -2,6 +2,7 @@
 
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -27,6 +28,23 @@ void _verTextoOcr(BuildContext context, String? texto) {
         ),
       ),
       actions: [
+        // Copia el texto completo al portapapeles — pensado para poder
+        // pegarlo directo en un mensaje/chat cuando algo no se extrae
+        // bien, en vez de tener que mandar una captura de pantalla.
+        TextButton.icon(
+          onPressed: (texto == null || texto.trim().isEmpty)
+              ? null
+              : () async {
+                  await Clipboard.setData(ClipboardData(text: texto));
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Texto copiado al portapapeles')),
+                    );
+                  }
+                },
+          icon: const Icon(Icons.copy),
+          label: const Text('Copiar'),
+        ),
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cerrar')),
       ],
     ),

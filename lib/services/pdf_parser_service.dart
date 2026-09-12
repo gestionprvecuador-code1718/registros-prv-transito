@@ -446,16 +446,16 @@ class PdfParserService {
   /// pegado justo después de "Placa:" es en realidad el valor de
   /// "Marca" (ej. texto real: "...GSO9232 Placa: KIA Objeto en
   /// calidad Objeto: Marca: Modelo:..."). Por eso NO se intenta leer
-  /// la placa ni la marca de este bloque (antes se leía mal y
-  /// contaminaba el cruce de datos con una placa falsa como
-  /// "CHEVROLET"). En vez de eso, cada entrada de vehículo dentro de
-  /// este bloque se reconoce por el separador fijo "Objeto en
-  /// calidad" (uno por vehículo, en el MISMO ORDEN en que aparecen los
-  /// vehículos en el bloque narrativo), y ahí dentro solo se sacan
-  /// chasis/país/año con patrones inconfundibles que no dependen del
-  /// orden (VIN de 17 caracteres, nombre de país conocido, año en
-  /// rango plausible) — motor y color quedan fuera a propósito, ver
-  /// nota al inicio del archivo.
+  /// la placa de este bloque (antes se leía mal y contaminaba el
+  /// cruce de datos con una placa falsa como "CHEVROLET"). En cambio,
+  /// esa Marca pegada a "Placa:" SÍ se guarda como 'marcaHint' — sirve
+  /// para saber a qué vehículo pertenece cada entrada de este bloque
+  /// comparándola contra la Marca ya extraída de la narrativa, en vez
+  /// de asumir que el orden de este bloque es el mismo que el de la
+  /// narrativa (NO lo es siempre: confirmado en ronda 14 con un parte
+  /// real donde el 2º vehículo de la narrativa aparecía PRIMERO en
+  /// este bloque, y por eso el chasis les salía cruzado entre los 2
+  /// vehículos).
   List<Map<String, String>> _extraerIndicios(String texto) {
     final resultado = <Map<String, String>>[];
     final inicio = RegExp(r'Objetos registrados como indicios', caseSensitive: false).firstMatch(texto);
@@ -467,43 +467,61 @@ class PdfParserService {
         .firstMatch(bloque);
     if (fin != null) bloque = bloque.substring(0, fin.start);
 
-    final trozos = bloque.split(RegExp(r'Objeto en calidad', caseSensitive: false));
-    for (final trozo in trozos.skip(1)) {
+    final separador = RegExp(r'Objeto en calidad', caseSensitive: false);
+    final cortes = separador.allMatches(bloque).toList();
+    for (var i = 0; i < cortes.length; i++) {
       try {
-      final chasis = _buscar(trozo, RegExp(r'\b([A-HJ-NPR-Z0-9]{17})\b'));
-      final pais = _buscar(
-          trozo,
-          RegExp(
-              r'\b(ECUADOR|JAPON|COLOMBIA|PERU|CHINA|COREA(?:\s*DEL\s*SUR)?|ESTADOS UNIDOS|ALEMANIA|BRASIL|MEXICO|INDIA)\b'));
-      final anios = RegExp(r'\b(19[7-9]\d|20[0-2]\d)\b').allMatches(trozo).map((m) => m.group(1)!).toList();
-      final anio = anios.isEmpty ? null : anios.last;
-      // Modelo: en este bloque, justo después del separador "Objeto en
-      // calidad" vienen 2 palabras sueltas (el estado, ej. "RETENIDO",
-      // y el tipo de objeto, ej. "CAMION"/"JEEP") y LUEGO el texto del
-      // modelo, hasta la siguiente etiqueta/dato reconocible (color,
-      // VIN, etc.) — confirmado con 2 vehículos reales en la ronda 13
-      // (ej. "RETENIDO JEEP SPORTAGE LX DAB AC 2.0 4P4X2 TM Color
-      // secundario:..." -> Modelo = "SPORTAGE LX DAB AC 2.0 4P4X2 TM").
-      String? modelo;
-      final tokens = trozo.trim().split(RegExp(r'\s+'));
-      if (tokens.length > 2) {
-        final resto = tokens.sublist(2).join(' ');
-        final finModelo = RegExp(
-          r'Color secundario:|\b(BLANCO|NEGRO|ROJO|AZUL|PLATA|PLATEADO|GRIS|AMARILLO|VERDE|CAFE|MARR[OÓ]N|NARANJA|VINO|BEIGE)\b|[A-HJ-NPR-Z0-9]{17}',
-          caseSensitive: false,
-        ).firstMatch(resto);
-        final crudo = finModelo == null ? resto : resto.substring(0, finModelo.start);
-        final recortado = crudo.trim();
-        if (recortado.isNotEmpty) modelo = recortado;
-      }
+        final trozo = bloque.substring(cortes[i].end, i + 1 < cortes.length ? cortes[i + 1].start : bloque.length);
 
-      if (chasis == null && pais == null && anio == null && modelo == null) continue;
-      resultado.add({
-        if (chasis != null) 'chasis': chasis,
-        if (pais != null) 'pais': pais,
-        if (anio != null) 'anio': anio,
-        if (modelo != null) 'modelo': modelo,
-      });
+        // Pista de marca: viene en el pedazo ANTES de este corte,
+        // pegada a "Placa:" (ver nota arriba).
+        final anterior = bloque.substring(i == 0 ? 0 : cortes[i - 1].end, cortes[i].start);
+        final marcaHint = _buscar(anterior, RegExp(r'Placas?:?\s*([A-Za-zÁÉÍÓÚñÑ]{3,20})\s*$'));
+
+        final chasis = _buscar(trozo, RegExp(r'\b([A-HJ-NPR-Z0-9]{17})\b'));
+        final pais = _buscar(
+            trozo,
+            RegExp(
+                r'\b(ECUADOR|JAPON|COLOMBIA|PERU|CHINA|COREA(?:\s*DEL\s*SUR)?|ESTADOS UNIDOS|ALEMANIA|BRASIL|MEXICO|INDIA)\b'));
+        final anios = RegExp(r'\b(19[7-9]\d|20[0-2]\d)\b').allMatches(trozo).map((m) => m.group(1)!).toList();
+        final anio = anios.isEmpty ? null : anios.last;
+
+        // Modelo: justo después del separador "Objeto en calidad"
+        // vienen primero las ETIQUETAS que quedaron pegadas (ej.
+        // "Objeto: Marca: Modelo: Color principal: Motor: Chasis:") y
+        // SOLO DESPUÉS los valores reales — hay que saltar esas
+        // etiquetas antes de aplicar la regla de "2 palabras (estado
+        // del objeto + tipo) y el resto es el Modelo". Confirmado en
+        // ronda 14: sin este salto, "Modelo" salía con el texto de las
+        // etiquetas en vez del dato real.
+        final valores = trozo.replaceFirst(
+          RegExp(
+            r'^\s*(Objeto:\s*)?(Marca:\s*)?(Modelo:\s*)?(Color\s*principal:\s*)?(Motor:\s*)?(Chasis:\s*)?',
+            caseSensitive: false,
+          ),
+          '',
+        );
+        String? modelo;
+        final tokens = valores.trim().split(RegExp(r'\s+'));
+        if (tokens.length > 2) {
+          final resto = tokens.sublist(2).join(' ');
+          final finModelo = RegExp(
+            r'Color secundario:|\b(BLANCO|NEGRO|ROJO|AZUL|PLATA|PLATEADO|GRIS|AMARILLO|VERDE|CAFE|MARR[OÓ]N|NARANJA|VINO|BEIGE)\b|[A-HJ-NPR-Z0-9]{17}',
+            caseSensitive: false,
+          ).firstMatch(resto);
+          final crudo = finModelo == null ? resto : resto.substring(0, finModelo.start);
+          final recortado = crudo.trim();
+          if (recortado.isNotEmpty) modelo = recortado;
+        }
+
+        if (chasis == null && pais == null && anio == null && modelo == null && marcaHint == null) continue;
+        resultado.add({
+          if (marcaHint != null) 'marcaHint': marcaHint,
+          if (chasis != null) 'chasis': chasis,
+          if (pais != null) 'pais': pais,
+          if (anio != null) 'anio': anio,
+          if (modelo != null) 'modelo': modelo,
+        });
       } catch (_) {
         continue;
       }
@@ -593,7 +611,13 @@ class PdfParserService {
 
   List<ParticipanteVehiculo> _extraerPorBloquesVehiculo(String texto) {
     final resultado = <ParticipanteVehiculo>[];
-    final bloques = texto.split(RegExp(r'\bVEH[IÍ]CULO\s*\d+\b', caseSensitive: false));
+    // Tolera "Vehículo N.° 1" / "VEHICULO No. 1" además de "VEHICULO 1"
+    // — antes solo el segundo formato separaba bien en bloques; el
+    // primero caía al método de ventana (_extraerFlexible), que puede
+    // mezclar datos entre vehículos cercanos (confirmado en ronda 14:
+    // 2 vehículos de un parte real salieron con la MISMA marca/color
+    // por esto).
+    final bloques = texto.split(RegExp(r'\bVEH[IÍ]CULOS?\s*(?:N[°º.]*\s*)?\d+\b', caseSensitive: false));
 
     for (final bloque in bloques.skip(1)) {
       try {
@@ -625,14 +649,25 @@ class PdfParserService {
     final resultado = <ParticipanteVehiculo>[];
     final regexPlaca = RegExp(r'Placas?:?\s*([A-Z0-9\- ]{5,10})');
     final placasVistas = <String>{};
+    final coincidencias = regexPlaca.allMatches(texto).toList();
 
-    for (final m in regexPlaca.allMatches(texto)) {
+    for (var i = 0; i < coincidencias.length; i++) {
+      final m = coincidencias[i];
       try {
         final placa = _normalizarPlaca(m.group(1)!);
         if (placa.length < 5 || !placasVistas.add(placa)) continue;
 
-        final inicioVentana = (m.start - 300).clamp(0, texto.length);
-        final finVentana = (m.end + 300).clamp(0, texto.length);
+        // La ventana de ±300 caracteres NUNCA cruza hacia la "Placa:"
+        // anterior o siguiente. Sin este límite, cuando 2 vehículos
+        // están descritos a menos de 300 caracteres uno del otro (caso
+        // común: "Tipo/Marca/Color/Placa" corto por vehículo), la
+        // ventana de uno se metía en el texto del otro y los dos
+        // terminaban con la misma marca/color (confirmado en ronda 14
+        // con un parte real de 2 vehículos).
+        final limiteAnterior = i > 0 ? coincidencias[i - 1].end : 0;
+        final limiteSiguiente = i < coincidencias.length - 1 ? coincidencias[i + 1].start : texto.length;
+        final inicioVentana = (m.start - 300 < limiteAnterior ? limiteAnterior : m.start - 300).clamp(0, texto.length);
+        final finVentana = (m.end + 300 > limiteSiguiente ? limiteSiguiente : m.end + 300).clamp(0, texto.length);
         final ventana = texto.substring(inicioVentana, finVentana);
         final campos = _camposDeBloque(ventana);
 
@@ -678,11 +713,27 @@ class PdfParserService {
     // bloque específico no es confiable. El Modelo solo se toma de acá
     // si la narrativa no trajo uno ya (ver _camposDeBloque).
     final indicios = _intentar(() => _extraerIndicios(limpio)) ?? [];
+    // Emparejar cada vehículo con SU entrada de indicios: primero por
+    // Marca (comparando la 'marcaHint' del bloque de indicios contra
+    // la Marca ya extraída de la narrativa) — el orden de este bloque
+    // NO siempre coincide con el de la narrativa (confirmado en ronda
+    // 14, ver nota en _extraerIndicios). Si dos vehículos comparten
+    // marca o no hay pista, se usa la posición como respaldo.
+    final usados = <int>{};
     lista = lista.asMap().entries.map((entry) {
       final i = entry.key;
       final p = entry.value;
-      if (i >= indicios.length) return p;
-      final ind = indicios[i];
+      var idxIndicio = -1;
+      if (p.marca.isNotEmpty) {
+        idxIndicio = indicios.indexWhere((ind) =>
+            !usados.contains(indicios.indexOf(ind)) &&
+            ind['marcaHint'] != null &&
+            ind['marcaHint']!.toUpperCase() == p.marca.toUpperCase());
+      }
+      if (idxIndicio == -1 && i < indicios.length && !usados.contains(i)) idxIndicio = i;
+      if (idxIndicio == -1) return p;
+      usados.add(idxIndicio);
+      final ind = indicios[idxIndicio];
       return p.copyWith(
         modelo: p.modelo.isNotEmpty ? null : ind['modelo'],
         chasis: ind['chasis'],

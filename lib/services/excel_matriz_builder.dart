@@ -244,7 +244,7 @@ class ExcelMatrizBuilder {
             ? '${ing.causaLegal} - ${ing.detalleCausa}'
             : '${ing.causaPrincipal} - ${ing.submotivoFalta}'),
         TextCellValue(ing.autoridadRequirente),
-        TextCellValue(ing.placaGrua),
+        TextCellValue(lib?.placaGrua ?? ''),
         TextCellValue(ing.conductorGrua),
         TextCellValue(ing.custodioRecibeNombre),
         TextCellValue(lib?.fechaSalida ?? ''),
@@ -260,10 +260,10 @@ class ExcelMatrizBuilder {
         if (valorCalculado != null) DoubleCellValue(valorCalculado) else TextCellValue(''),
         TextCellValue(ing.hojaIngresoNro), // N° formulario de egreso = mismo N° de hoja
         TextCellValue(lib?.custodioEntregaNombre ?? ''),
-        TextCellValue(ing.ordenPagoAlcohocheckNro),
-        TextCellValue(ing.valorAlcohocheck),
-        TextCellValue(ing.periciaRealizada),
-        TextCellValue(ing.peritoNombre),
+        TextCellValue(lib?.ordenPagoAlcohocheckNro ?? ''),
+        TextCellValue(lib?.valorAlcohocheck ?? ''),
+        TextCellValue(lib?.periciaRealizada ?? ''),
+        TextCellValue(lib?.peritoNombre ?? ''),
         TextCellValue(lib != null && lib.pagos.isNotEmpty ? lib.pagos.first.horaFechaPago : ''),
         TextCellValue(lib != null && lib.pagos.isNotEmpty ? lib.pagos.first.comprobantePagoNro : ''),
         TextCellValue(lib != null && lib.pagos.isNotEmpty
