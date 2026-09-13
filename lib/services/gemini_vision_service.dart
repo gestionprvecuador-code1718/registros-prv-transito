@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 /// Envía una o varias fotos a Google Gemini (modelo con visión) y le pide
@@ -11,6 +12,15 @@ import 'package:http/http.dart' as http;
 /// mano — a costa de necesitar internet y una API key.
 ///
 /// La API key es gratuita: se obtiene en https://aistudio.google.com/apikey
+/// Resultado de leer un parte digital con IA: metadatos comunes del
+/// incidente + la lista de vehículos involucrados (puede tener 1 o
+/// varios elementos).
+class ParteDigitalExtraido {
+  final Map<String, String> metadatos;
+  final List<Map<String, String>> vehiculos;
+  ParteDigitalExtraido({required this.metadatos, required this.vehiculos});
+}
+
 class GeminiVisionService {
   static const _modelo = 'gemini-3.6-flash';
   static const _endpoint =
@@ -82,6 +92,72 @@ class GeminiVisionService {
   Future<Map<String, String>> extraerLibertad(List<File> imagenes, String apiKey) =>
       _extraer(imagenes, apiKey, _camposLibertad, _promptLibertad);
 
+  /// Lee un parte policial de tránsito DIGITAL (PDF de Ecu911) a partir
+  /// de imágenes ya rasterizadas de cada una de sus páginas — mismo
+  /// principio que extraerIngreso/extraerLibertad, pero con un prompt
+  /// propio porque un parte puede describir VARIOS vehículos a la vez.
+  ///
+  /// Este es ahora el camino PRINCIPAL para leer un PDF: a diferencia
+  /// de extraer el texto interno del PDF y aplicarle expresiones
+  /// regulares (ver PdfParserService, que queda como respaldo sin
+  /// conexión), la IA "lee" cada página como lo haría una persona, sin
+  /// depender de en qué orden haya quedado el texto dentro del PDF —
+  /// eso varía de un patio a otro y de una versión de Ecu911 a otra,
+  /// cosa que ningún conjunto fijo de expresiones regulares puede
+  /// cubrir por completo.
+  Future<ParteDigitalExtraido> extraerParteDigital(List<Uint8List> paginasPng, String apiKey) async {
+    final parts = <Map<String, dynamic>>[
+      {'text': _promptParteDigital}
+    ];
+    for (final png in paginasPng) {
+      parts.add({
+        'inline_data': {'mime_type': 'image/png', 'data': base64Encode(png)}
+      });
+    }
+
+    final body = jsonEncode({
+      'contents': [
+        {'parts': parts}
+      ],
+      'generationConfig': {'response_mime_type': 'application/json'},
+    });
+
+    final respuesta = await http
+        .post(
+          Uri.parse('$_endpoint?key=$apiKey'),
+          headers: {'Content-Type': 'application/json'},
+          body: body,
+        )
+        .timeout(const Duration(seconds: 60));
+
+    if (respuesta.statusCode != 200) {
+      throw Exception('Gemini respondió ${respuesta.statusCode}: ${respuesta.body}');
+    }
+
+    final data = jsonDecode(respuesta.body);
+    final texto = data['candidates']?[0]?['content']?['parts']?[0]?['text'];
+    if (texto == null) {
+      throw Exception('Respuesta inesperada de Gemini: ${respuesta.body}');
+    }
+
+    final json = jsonDecode(texto) as Map<String, dynamic>;
+    const metaCampos = [
+      'parteNo', 'fechaHecho', 'horaHecho', 'policiaNombre', 'policiaCedula', 'causaLegal', 'circunstancias',
+    ];
+    final metadatos = {for (final c in metaCampos) c: (json[c] ?? '').toString()};
+
+    const vehCampos = [
+      'placa', 'tipo', 'marca', 'modelo', 'color', 'chasis', 'motor', 'pais', 'anio',
+      'conductor', 'conductorCedula', 'propietario', 'propietarioCedula',
+    ];
+    final vehiculosJson = (json['vehiculos'] as List?) ?? const [];
+    final vehiculos = vehiculosJson.whereType<Map<String, dynamic>>().map((v) {
+      return {for (final c in vehCampos) c: (v[c] ?? '').toString()};
+    }).toList();
+
+    return ParteDigitalExtraido(metadatos: metadatos, vehiculos: vehiculos);
+  }
+
   static const _promptIngreso = '''
 Eres un asistente que digitaliza hojas de "RECEPCIÓN DEL VEHÍCULO EN EL PATIO DE RETENCIÓN VEHICULAR DE TRÁNSITO" de la Policía Nacional del Ecuador.
 La hoja tiene texto impreso (etiquetas) y datos llenados a mano (a veces con letra cursiva difícil).
@@ -150,6 +226,45 @@ REGLAS IMPORTANTES:
 - Si un dato no aparece en NINGUNA de las fotos o no se puede leer con confianza, usa "" (cadena vacía). NUNCA inventes ni calcules valores.
 - No confundas el "valor" del comprobante bancario con el "precioUnitario" de la Orden de Pago: son documentos distintos.
 Responde ÚNICAMENTE el objeto JSON con las claves: hojaIngresoNro, marca, color, placa, fechaIngreso, fechaSalida, retiradoPor, cedulaRetira, memorandoNro, memorandoFecha, oficioDevolucionNro, oficioDevolucionFecha, firmadoPor, ordenPagoNro, diasPagados, precioUnitario, tipoServicioGaraje, comprobantePagoNro, valor, valorTransaccionOComision, horaFechaPago, entidadFinanciera.''';
+
+  static const _promptParteDigital = '''
+Eres un asistente que digitaliza partes policiales de tránsito DIGITALES (emitidos por el sistema Ecu911 de Ecuador), que vas a recibir como una imagen de cada página del PDF, en orden.
+Un mismo parte describe un incidente y puede tener UNO o VARIOS vehículos involucrados.
+
+Devuelve ÚNICAMENTE un objeto JSON (sin markdown, sin explicación) con esta forma exacta:
+{
+  "parteNo": "número de 'Parte Policial No.' en la sección 'Información general'",
+  "fechaHecho": "fecha del hecho, formato dd/mm/aaaa",
+  "horaHecho": "hora aproximada del hecho, formato hh:mm",
+  "policiaNombre": "Grado. NOMBRE COMPLETO del policía de MAYOR GRADO en la tabla 'Personal policial que participó en el hecho' (si esa tabla no existe, usa el de 'Realizado por')",
+  "policiaCedula": "cédula de ese mismo policía",
+  "causaLegal": "resumen corto de la causa/circunstancia (ej. Accidente de tránsito)",
+  "circunstancias": "el texto completo de la sección 'Circunstancias del hecho', tal como aparece escrito",
+  "vehiculos": [
+    {
+      "placa": "placa de este vehículo",
+      "tipo": "tipo de vehículo (ej. Automóvil, Camioneta, Camión, Bus, Jeep, Furgón, Motocicleta)",
+      "marca": "marca",
+      "modelo": "modelo/versión si aparece",
+      "color": "color de ESTE vehículo específico (no mezcles el color de otro vehículo del mismo parte)",
+      "chasis": "número de chasis/VIN si aparece (normalmente 17 caracteres), suele estar en 'Objetos registrados como indicios'",
+      "motor": "número de motor si aparece",
+      "pais": "país de fabricación si aparece",
+      "anio": "año de fabricación si aparece",
+      "conductor": "nombre del conductor de ESTE vehículo",
+      "conductorCedula": "cédula del conductor",
+      "propietario": "nombre del propietario de ESTE vehículo (si el parte no distingue propietario de conductor, repite el nombre del conductor)",
+      "propietarioCedula": "cédula del propietario"
+    }
+  ]
+}
+
+REGLAS IMPORTANTES:
+- Incluye una entrada en "vehiculos" por CADA vehículo descrito como involucrado/retenido (secciones "VEHÍCULOS INVOLUCRADOS" o "Participante N"). NO incluyas vehículos que solo se mencionan de paso en el relato sin ser parte del incidente (ej. la ambulancia, el vehículo policial que acude, la grúa, el vehículo de Medicina Legal).
+- No repitas ni mezcles datos entre vehículos distintos: cada uno tiene su propia marca/color/chasis/conductor, aunque estén descritos muy cerca uno del otro en el texto.
+- En los PDF de Ecu911 es normal que, dentro de una tabla, las etiquetas de las columnas y sus valores no queden alineados visualmente en el mismo orden — interpreta el CONTENIDO real de cada dato según el contexto, no la posición del texto en la página.
+- Si un dato no aparece o no se puede leer con confianza, usa "" (cadena vacía). NUNCA inventes ni calcules datos.
+Responde ÚNICAMENTE el objeto JSON descrito arriba.''';
 
   Future<Map<String, String>> _extraer(
     List<File> imagenes,

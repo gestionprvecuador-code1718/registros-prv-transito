@@ -21,8 +21,17 @@ dependencies:
   # Seleccionar archivos PDF desde el almacenamiento
   file_picker: ^8.1.2
 
-  # Leer el texto de un PDF digital (parte policial Ecu911, no requiere OCR)
+  # Leer el texto de un PDF digital (parte policial Ecu911) como
+  # respaldo sin conexión — el camino principal ahora es leerlo con IA
+  # (ver "printing" abajo), esto solo se usa si no hay internet/API key
+  # o si la IA no logra leer nada.
   syncfusion_flutter_pdf: ^27.2.4
+
+  # Convierte cada página de un PDF en una imagen (PNG), para poder
+  # mandarlas a Gemini Vision exactamente igual que una foto — así la
+  # lectura de un parte digital ya no depende de que el texto interno
+  # del PDF venga en un orden predecible (varía de patio en patio).
+  printing: ^5.13.4
 
   # Llamadas a la API de Gemini (lee las fotos con IA en vez de OCR local)
   http: ^1.2.0
@@ -60,9 +69,6 @@ dependencies:
   shared_preferences: ^2.5.5
   excel: ^4.0.6
   google_generative_ai: ^0.4.7
-
-  # Formateo de fechas (dd/MM/yyyy) en Ingreso y Libertad
-  intl: ^0.19.0
 
 dev_dependencies:
   flutter_test:

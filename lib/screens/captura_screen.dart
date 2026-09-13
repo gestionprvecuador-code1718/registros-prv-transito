@@ -1,9 +1,11 @@
 // RUTA DE ARCHIVO: lib/screens/captura_screen.dart
 
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:printing/printing.dart';
 import 'home_screen.dart';
 import 'formulario_screen.dart';
 import 'formulario_libertad_screen.dart';
@@ -14,6 +16,7 @@ import '../services/api_key_service.dart';
 import '../services/pdf_parser_service.dart';
 import '../models/caso_ingreso.dart';
 import '../models/caso_libertad.dart';
+import '../models/participante_vehiculo.dart';
 
 class CapturaScreen extends StatefulWidget {
   final TipoParte tipo;
@@ -59,10 +62,102 @@ class _CapturaScreenState extends State<CapturaScreen> {
       withData: true,
     );
     if (resultado == null || resultado.files.single.bytes == null) return;
+    final bytes = resultado.files.single.bytes!;
 
+    // Camino principal: leer el PDF con IA (igual que las fotos) —
+    // convierte cada página en imagen y deja que Gemini "lea" el
+    // parte como lo haría una persona, sin depender de en qué orden
+    // haya quedado el texto interno del PDF (eso varía de un patio a
+    // otro). Si no hay API key configurada, o la IA falla o no
+    // encuentra ningún vehículo, se cae automáticamente al método
+    // sin conexión (texto + expresiones regulares) como respaldo —
+    // nunca se deja al usuario sin ninguna salida.
+    final apiKey = await ApiKeyService().obtenerApiKey();
+    if (apiKey != null) {
+      final huboExito = await _leerPdfConIA(bytes, apiKey);
+      if (huboExito) return;
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('La IA no pudo leer este PDF, probando con el método sin conexión...')),
+      );
+    }
+    if (mounted) await _leerPdfSinConexion(bytes);
+  }
+
+  /// Rasteriza cada página del PDF a imagen (PNG) y las manda a
+  /// Gemini Vision con un prompt propio para partes digitales (puede
+  /// haber varios vehículos). Devuelve true si logró encontrar al
+  /// menos un vehículo y ya navegó a la pantalla de selección.
+  Future<bool> _leerPdfConIA(Uint8List bytes, String apiKey) async {
     setState(() => _procesando = true);
     try {
-      final bytes = resultado.files.single.bytes!;
+      final paginas = <Uint8List>[];
+      // Máximo 8 páginas: los partes reales tienen 4-5, este límite
+      // solo evita un PDF anormalmente largo demore de más o pese de
+      // más para la conexión del celular.
+      await for (final pagina in Printing.raster(bytes, dpi: 200)) {
+        paginas.add(await pagina.toPng());
+        if (paginas.length >= 8) break;
+      }
+      if (paginas.isEmpty) return false;
+
+      final extraido = await GeminiVisionService().extraerParteDigital(paginas, apiKey);
+
+      final participantes = extraido.vehiculos
+          .map((v) => ParticipanteVehiculo(
+                placa: v['placa'] ?? '',
+                tipo: v['tipo'] ?? '',
+                marca: v['marca'] ?? '',
+                modelo: v['modelo'] ?? '',
+                color: v['color'] ?? '',
+                conductor: v['conductor'] ?? '',
+                conductorCedula: v['conductorCedula'] ?? '',
+                propietario: v['propietario'] ?? '',
+                propietarioCedula: v['propietarioCedula'] ?? '',
+                chasis: v['chasis'] ?? '',
+                pais: v['pais'] ?? '',
+                anio: v['anio'] ?? '',
+              ))
+          .where((p) => p.placa.trim().isNotEmpty)
+          .toList();
+      if (participantes.isEmpty) return false;
+
+      final metadatos = MetadatosParte(
+        parteNo: extraido.metadatos['parteNo'] ?? '',
+        fechaHecho: extraido.metadatos['fechaHecho'] ?? '',
+        horaHecho: extraido.metadatos['horaHecho'] ?? '',
+        elaboradoPor: extraido.metadatos['policiaNombre'] ?? '',
+        elaboradoPorCedula: extraido.metadatos['policiaCedula'] ?? '',
+        circunstancias: extraido.metadatos['circunstancias'] ?? '',
+      );
+
+      if (!mounted) return true;
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => SeleccionarVehiculoScreen(
+            participantes: participantes,
+            metadatos: metadatos,
+            textoCompleto: 'Este parte se leyó con IA (Gemini Vision) a partir de imágenes de cada '
+                'página del PDF — no queda un texto crudo único para mostrar aquí.',
+          ),
+        ),
+      );
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      if (mounted) setState(() => _procesando = false);
+    }
+  }
+
+  /// Respaldo sin conexión (o cuando la IA no encontró nada): lee el
+  /// texto interno del PDF con Syncfusion y lo interpreta con
+  /// expresiones regulares. Menos preciso que la IA porque depende de
+  /// que el texto del PDF venga en un orden más o menos predecible.
+  Future<void> _leerPdfSinConexion(Uint8List bytes) async {
+    setState(() => _procesando = true);
+    try {
       final parser = PdfParserService();
       final texto = parser.extraerTextoBytes(bytes);
       final metadatos = parser.extraerMetadatos(texto);
@@ -72,7 +167,11 @@ class _CapturaScreenState extends State<CapturaScreen> {
 
       if (participantes.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No se detectó ningún vehículo en este PDF. Prueba con las fotos.')),
+          const SnackBar(
+            content: Text('No se detectó ningún vehículo en este PDF (ni con IA ni sin conexión). '
+                'Prueba con las fotos o llena el formulario a mano.'),
+            duration: Duration(seconds: 5),
+          ),
         );
         return;
       }
