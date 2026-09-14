@@ -11,6 +11,7 @@ import 'documento_screen.dart';
 import 'ajustes_screen.dart';
 import 'buscar_placa_screen.dart';
 import 'informe_semanal_screen.dart';
+import 'pdfs_guardados_screen.dart';
 import '../services/storage_service.dart';
 import '../services/auth_service.dart';
 
@@ -316,6 +317,15 @@ class HomeScreen extends StatelessWidget {
                             MaterialPageRoute(
                               builder: (_) => const DocumentoScreen(tipo: TipoParte.libertad),
                             ),
+                          ),
+                        ),
+                        _TarjetaVidrio(
+                          icono: Icons.picture_as_pdf_outlined,
+                          colorIcono: Colors.redAccent.shade100,
+                          titulo: 'PDFs guardados',
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (_) => const PdfsGuardadosScreen()),
                           ),
                         ),
                       ],

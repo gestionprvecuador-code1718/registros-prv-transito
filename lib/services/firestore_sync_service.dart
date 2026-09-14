@@ -96,6 +96,32 @@ class FirestoreSyncService {
     return query.docs.map((d) => CasoIngreso.fromJson(d.data())).toList();
   }
 
+  /// Ronda 21: registra cada vez que un caso YA guardado se vuelve a
+  /// editar (no la primera vez que se crea) — pensado para que el
+  /// futuro panel de administrador pueda mostrar estadísticas de
+  /// cuántos ingresos/libertades se corrigieron después, por patio.
+  /// Es "mejor esfuerzo" igual que el resto de esta clase: si falla,
+  /// no bloquea el guardado del caso, simplemente no queda registrada
+  /// esa estadística puntual.
+  Future<void> registrarEdicion({
+    required String tipo, // 'ingreso' | 'libertad'
+    required String casoId,
+    required String placa,
+    required String patio,
+  }) async {
+    try {
+      await _firestore.collection('historial_ediciones').add({
+        'tipo': tipo,
+        'casoId': casoId,
+        'placa': placa,
+        'patio': patio,
+        'editadoEn': FieldValue.serverTimestamp(),
+      });
+    } catch (_) {
+      // Sin internet u otra falla: no pasa nada, es solo estadística.
+    }
+  }
+
   /// Igual que obtenerIngresos, pero para libertades.
   Future<List<CasoLibertad>> obtenerLibertades(String patio) async {
     final query = await _firestore

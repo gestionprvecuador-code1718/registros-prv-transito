@@ -147,7 +147,8 @@ class StorageService {
   static Future<void> guardarCasoIngreso(CasoIngreso caso) async {
     await _asegurarCargadoLocal();
     final indice = _cacheIngresos!.indexWhere((c) => c.id == caso.id);
-    if (indice == -1) {
+    final esEdicion = indice != -1; // ronda 21: ya existía localmente -> es una edición
+    if (!esEdicion) {
       _cacheIngresos!.add(caso);
     } else {
       _cacheIngresos![indice] = caso;
@@ -166,12 +167,21 @@ class StorageService {
     // por falta de internet el caso de todos modos ya quedó a salvo
     // en el respaldo local de arriba.
     await FirestoreSyncService().subirIngreso(caso, patio: patio);
+    if (esEdicion) {
+      await FirestoreSyncService().registrarEdicion(
+        tipo: 'ingreso',
+        casoId: caso.id,
+        placa: caso.placa,
+        patio: patio,
+      );
+    }
   }
 
   static Future<void> guardarCasoLibertad(CasoLibertad caso) async {
     await _asegurarCargadoLocal();
     final indice = _cacheLibertades!.indexWhere((c) => c.id == caso.id);
-    if (indice == -1) {
+    final esEdicion = indice != -1; // ronda 21: ya existía localmente -> es una edición
+    if (!esEdicion) {
       _cacheLibertades!.add(caso);
     } else {
       _cacheLibertades![indice] = caso;
@@ -180,6 +190,14 @@ class StorageService {
 
     final patio = await _patioDelUsuario();
     await FirestoreSyncService().subirLibertad(caso, patio: patio);
+    if (esEdicion) {
+      await FirestoreSyncService().registrarEdicion(
+        tipo: 'libertad',
+        casoId: caso.id,
+        placa: caso.placa,
+        patio: patio,
+      );
+    }
   }
 
   // ---------- Generación de documentos ----------

@@ -1,5 +1,6 @@
 // RUTA DE ARCHIVO: lib/screens/captura_screen.dart
 
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
@@ -14,6 +15,7 @@ import 'ajustes_screen.dart';
 import '../services/gemini_vision_service.dart';
 import '../services/api_key_service.dart';
 import '../services/pdf_parser_service.dart';
+import '../services/pdf_respaldo_service.dart';
 import '../models/caso_ingreso.dart';
 import '../models/caso_libertad.dart';
 import '../models/participante_vehiculo.dart';
@@ -64,6 +66,14 @@ class _CapturaScreenState extends State<CapturaScreen> {
     if (resultado == null || resultado.files.single.bytes == null) return;
     final bytes = resultado.files.single.bytes!;
 
+    // Ronda 21: respaldo local del PDF tal como llegó, ANTES de leerlo
+    // con IA o sin conexión — así queda guardado en el celular (carpeta
+    // propia de la app, visible en "PDFs guardados") pase lo que pase
+    // con la lectura automática. Xavier pidió que sea local en vez de
+    // subirlo a Firebase Storage, para no necesitar el plan de pago
+    // "Blaze". Es "mejor esfuerzo": si falla, no interrumpe la captura.
+    unawaited(_respaldarPdfLocal(bytes, resultado.files.single.name));
+
     // Camino principal: leer el PDF con IA (igual que las fotos) —
     // convierte cada página en imagen y deja que Gemini "lea" el
     // parte como lo haría una persona, sin depender de en qué orden
@@ -82,6 +92,22 @@ class _CapturaScreenState extends State<CapturaScreen> {
       );
     }
     if (mounted) await _leerPdfSinConexion(bytes);
+  }
+
+  /// Guarda una copia del PDF original en el almacenamiento propio de
+  /// la app dentro del celular (no en la nube). Se usa el nombre
+  /// original del archivo si viene disponible, para que sea
+  /// reconocible en "PDFs guardados".
+  Future<void> _respaldarPdfLocal(Uint8List bytes, String? nombreOriginal) async {
+    try {
+      final limpio = (nombreOriginal ?? '').replaceAll('.pdf', '').replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+      final base = limpio.trim().isEmpty ? 'parte' : limpio;
+      final marca = DateTime.now().millisecondsSinceEpoch;
+      await PdfRespaldoService.guardar(bytes, nombreSugerido: '${base}_$marca');
+    } catch (_) {
+      // Respaldo best-effort: si falla (poco espacio, permisos, etc.)
+      // no se interrumpe la captura del parte.
+    }
   }
 
   /// Rasteriza cada página del PDF a imagen (PNG) y las manda a

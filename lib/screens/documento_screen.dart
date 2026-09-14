@@ -9,6 +9,7 @@ import '../models/caso_libertad.dart';
 import '../services/storage_service.dart';
 import 'buscar_placa_screen.dart' show EstadoVehiculoIcon;
 import 'formulario_screen.dart';
+import 'formulario_libertad_screen.dart';
 import 'captura_screen.dart';
 
 /// 02/sep: sello grande tipo "estampado" (rojo = todavía en el patio,
@@ -16,15 +17,47 @@ import 'captura_screen.dart';
 /// de cada caso encontrado para que el estado se note de un vistazo,
 /// como un sello de goma. Reutilizable en cualquier pantalla que liste
 /// ingresos/libertades.
+///
+/// 13/sep (ronda 21): Xavier reportó que en la lista de "Ingresos
+/// guardados" el sello se veía en VERDE con la palabra "LIBERADO" para
+/// casos que ya tenían libertad registrada — pero esa palabra/color es
+/// propia de la lista de Libertades y ahí confundía. Se agrega el modo
+/// [SelloEstadoGrande.ingresado], que siempre muestra "INGRESADO" en
+/// rojo sin importar si el vehículo ya salió o no (ese estado en tiempo
+/// real lo sigue mostrando el ícono de la izquierda y el botón "Liberar
+/// vehículo" debajo).
+enum _EstadoSello { ingresado, enElPatio, liberado }
+
 class SelloEstadoGrande extends StatelessWidget {
-  final bool liberado;
-  const SelloEstadoGrande({super.key, required this.liberado});
+  final _EstadoSello _estado;
+
+  const SelloEstadoGrande({super.key, required bool liberado})
+      : _estado = liberado ? _EstadoSello.liberado : _EstadoSello.enElPatio;
+
+  const SelloEstadoGrande.ingresado({super.key}) : _estado = _EstadoSello.ingresado;
 
   @override
   Widget build(BuildContext context) {
-    final color = liberado ? Colors.green.shade700 : Colors.red.shade700;
-    final texto = liberado ? 'LIBERADO' : 'EN EL PATIO';
-    final icono = liberado ? Icons.check_circle_outline : Icons.lock_outline;
+    late final Color color;
+    late final String texto;
+    late final IconData icono;
+    switch (_estado) {
+      case _EstadoSello.liberado:
+        color = Colors.green.shade700;
+        texto = 'LIBERADO';
+        icono = Icons.check_circle_outline;
+        break;
+      case _EstadoSello.enElPatio:
+        color = Colors.red.shade700;
+        texto = 'EN EL PATIO';
+        icono = Icons.lock_outline;
+        break;
+      case _EstadoSello.ingresado:
+        color = Colors.red.shade700;
+        texto = 'INGRESADO';
+        icono = Icons.assignment_turned_in_outlined;
+        break;
+    }
     return Center(
       child: Transform.rotate(
         angle: -0.08,
@@ -103,6 +136,18 @@ class _DocumentoScreenState extends State<DocumentoScreen> {
 
   bool _yaTieneLibertad(CasoIngreso ingreso) {
     return _libertades.any((l) => l.hojaIngresoNro == ingreso.hojaIngresoNro);
+  }
+
+  /// 13/sep (ronda 21): para poder editar una Libertad ya guardada hace
+  /// falta su Ingreso de origen (FormularioLibertadScreen lo requiere).
+  /// Puede dar null si el ingreso correspondiente ya no está en la
+  /// lista local (caso raro); en ese caso simplemente no se muestra el
+  /// botón de editar para esa tarjeta.
+  CasoIngreso? _ingresoDe(CasoLibertad libertad) {
+    for (final ingreso in _ingresos) {
+      if (ingreso.hojaIngresoNro == libertad.hojaIngresoNro) return ingreso;
+    }
+    return null;
   }
 
   void _liberarVehiculo(CasoIngreso ingreso) {
@@ -190,7 +235,7 @@ class _DocumentoScreenState extends State<DocumentoScreen> {
                                     padding: const EdgeInsets.fromLTRB(12, 4, 12, 14),
                                     child: Column(
                                       children: [
-                                        SelloEstadoGrande(liberado: tieneLibertad),
+                                        const SelloEstadoGrande.ingresado(),
                                         if (!tieneLibertad) ...[
                                           const SizedBox(height: 12),
                                           SizedBox(
@@ -211,7 +256,9 @@ class _DocumentoScreenState extends State<DocumentoScreen> {
                           })
                           .toList()
                       : _libertades
-                          .map((c) => Card(
+                          .map((c) {
+                            final ingresoOrigen = _ingresoDe(c);
+                            return Card(
                                 margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -220,10 +267,29 @@ class _DocumentoScreenState extends State<DocumentoScreen> {
                                       leading: const EstadoVehiculoIcon(liberado: true),
                                       title: Text('${c.placa} — ${c.marca} ${c.color}'),
                                       subtitle: Text('Hoja ${c.hojaIngresoNro} — Salida ${c.fechaSalida}'),
-                                      trailing: IconButton(
-                                        icon: const Icon(Icons.share_outlined),
-                                        tooltip: 'Compartir / Descargar',
-                                        onPressed: () => _compartirLibertad(c),
+                                      trailing: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          IconButton(
+                                            icon: const Icon(Icons.share_outlined),
+                                            tooltip: 'Compartir / Descargar',
+                                            onPressed: () => _compartirLibertad(c),
+                                          ),
+                                          if (ingresoOrigen != null)
+                                            IconButton(
+                                              icon: const Icon(Icons.edit),
+                                              tooltip: 'Editar',
+                                              onPressed: () => Navigator.push(
+                                                context,
+                                                MaterialPageRoute(
+                                                  builder: (_) => FormularioLibertadScreen(
+                                                    ingreso: ingresoOrigen,
+                                                    existente: c,
+                                                  ),
+                                                ),
+                                              ).then((_) => _cargar()),
+                                            ),
+                                        ],
                                       ),
                                     ),
                                     const Padding(
@@ -232,7 +298,8 @@ class _DocumentoScreenState extends State<DocumentoScreen> {
                                     ),
                                   ],
                                 ),
-                              ))
+                              );
+                          })
                           .toList(),
                 ),
     );

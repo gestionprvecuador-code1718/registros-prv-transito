@@ -220,8 +220,32 @@ class _FormularioLibertadScreenState extends State<FormularioLibertadScreen> {
       ..tipoServicioGaraje = _tipoServicioGaraje ?? '';
   }
 
+  /// Mismo criterio que en formulario_screen.dart (ronda 19): ya no
+  /// bloquea en silencio, avisa y deja decidir completar ahora o
+  /// guardar el avance y completar después.
+  Future<bool> _puedeContinuar() async {
+    final valido = _formKey.currentState!.validate();
+    if (valido) return true;
+    if (!mounted) return false;
+    final continuar = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Faltan campos obligatorios'),
+        content: const Text(
+          'Hay campos obligatorios vacíos (marcados en rojo en el formulario). '
+          'Puedes bajar a completarlos ahora, o guardar el avance y llenarlos más tarde.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Completar campos')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Guardar de todas formas')),
+        ],
+      ),
+    );
+    return continuar ?? false;
+  }
+
   Future<void> _guardar({bool compartirDespues = false}) async {
-    if (!_formKey.currentState!.validate()) return;
+    if (!await _puedeContinuar()) return;
     setState(() => _guardando = true);
 
     _aplicarCambiosACaso();
@@ -251,7 +275,7 @@ class _FormularioLibertadScreenState extends State<FormularioLibertadScreen> {
   // en esa misma bandeja. Si más adelante se quiere guardar de verdad en
   // el dispositivo sin pasar por la bandeja, hay que agregar path_provider.
   Future<void> _verVistaPrevia() async {
-    if (!_formKey.currentState!.validate()) return;
+    if (!await _puedeContinuar()) return;
     _aplicarCambiosACaso();
 
     final accion = await Navigator.push<String>(
@@ -412,7 +436,7 @@ class _FormularioLibertadScreenState extends State<FormularioLibertadScreen> {
             const SizedBox(height: 8),
             OutlinedButton.icon(
               icon: const Icon(Icons.save_outlined),
-              label: const Text('Guardar sin vista previa'),
+              label: const Text('Guardar avance'),
               onPressed: _guardando ? null : () => _guardar(),
             ),
           ],
