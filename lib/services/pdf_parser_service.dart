@@ -39,6 +39,36 @@ import '../models/participante_vehiculo.dart';
 ///  - Causa legal / Detalle causa <- todo el bloque "Circunstancias
 ///    del hecho"; si dentro de ese texto aparece una cita de artículo
 ///    ("art. 385 numeral 1", etc.) se usa esa cita como detalle.
+///
+/// RONDA 23 — 17 partes reales convertidos a Markdown por Xavier
+/// (carpeta RECURSOS/PARTES DE INGRESO del repo), usados para probar
+/// este parser contra variedad real sin depender solo de los 3
+/// formatos de bloque documentados arriba. Simulando la lógica real
+/// (regex por regex) contra los 17, se confirmó un bug real: la
+/// detección de "Placa" era case-sensitive (solo reconocía "Placa:"/
+/// "Placas:"), así que un parte que trae la etiqueta en MAYÚSCULAS
+/// ("PLACA:", confirmado en un parte real de accidente con
+/// aprehendidos) hacía que el parser devolviera CERO vehículos aunque
+/// el dato sí estaba ahí. Ya corregido (caseSensitive: false en las 3
+/// detecciones de placa). Con este solo fix, los 17 partes de prueba
+/// pasaron de 8 con "cero vehículos" a 0.
+///
+/// Hallazgo aparte (no corregido todavía, pendiente de decidir con
+/// Xavier si se aborda): 6 de los 17 partes de prueba NO eran del
+/// tipo "accidente/Noticia del Incidente" que este parser espera, sino
+/// un tipo de documento distinto — el "Oficio de Devolución de
+/// Vehículo" que se genera al dar la LIBERTAD de un carro, con
+/// prosa libre en vez de etiquetas "Campo: valor" (ej. "Marca Jac,
+/// color Blanco, de placas GTI1610"). Ese formato trae, ya redactados
+/// en el mismo párrafo, TODOS los datos que hoy se llenan a mano en el
+/// formulario de Libertad: Hoja de Ingreso Nro., Parte de ingreso Nro,
+/// Fecha de ingreso, Causa, Días de permanencia, Vehículo tipo, N° de
+/// orden de pago/comprobante de Garaje, Valor, fecha de pago y Entidad
+/// financiera — además de placa/marca/color y el propietario con
+/// cédula. Es una oportunidad real de auto-rellenar el formulario de
+/// LIBERTAD (no el de Ingreso) a partir de este documento, con un
+/// extractor dedicado — se necesita un método nuevo, no un parche a
+/// los de arriba, porque el formato es prosa libre y no bloques.
 class PdfParserService {
   String? _buscar(String texto, RegExp regex, {int grupo = 1}) {
     final m = regex.firstMatch(texto);
@@ -582,7 +612,7 @@ class PdfParserService {
 
     for (final bloque in bloques.skip(1)) {
       try {
-        final placaCruda = _buscar(bloque, RegExp(r'Placas?:?\s*([A-Z0-9\- ]{5,10})'));
+        final placaCruda = _buscar(bloque, RegExp(r'Placas?:?\s*([A-Z0-9\- ]{5,10})', caseSensitive: false));
         if (placaCruda == null) continue;
         final placa = _normalizarPlaca(placaCruda);
         if (placa.length < 5) continue;
@@ -621,7 +651,7 @@ class PdfParserService {
 
     for (final bloque in bloques.skip(1)) {
       try {
-        final placaCruda = _buscar(bloque, RegExp(r'Placas?:?\s*([A-Z0-9\- ]{5,10})'));
+        final placaCruda = _buscar(bloque, RegExp(r'Placas?:?\s*([A-Z0-9\- ]{5,10})', caseSensitive: false));
         if (placaCruda == null) continue;
         final placa = _normalizarPlaca(placaCruda);
         if (placa.length < 5) continue;
@@ -647,7 +677,7 @@ class PdfParserService {
 
   List<ParticipanteVehiculo> _extraerFlexible(String texto) {
     final resultado = <ParticipanteVehiculo>[];
-    final regexPlaca = RegExp(r'Placas?:?\s*([A-Z0-9\- ]{5,10})');
+    final regexPlaca = RegExp(r'Placas?:?\s*([A-Z0-9\- ]{5,10})', caseSensitive: false);
     final placasVistas = <String>{};
     final coincidencias = regexPlaca.allMatches(texto).toList();
 
