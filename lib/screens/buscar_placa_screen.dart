@@ -8,6 +8,7 @@ import 'formulario_screen.dart';
 import 'formulario_libertad_screen.dart';
 import 'captura_screen.dart';
 import 'home_screen.dart' show TipoParte;
+import 'documento_screen.dart' show SelloEstadoGrande;
 
 /// Ícono de estado (rojo = en el patio, verde = liberado), reutilizado
 /// en documento_screen.dart y en la tarjeta de datos heredados de
@@ -133,8 +134,8 @@ class _BuscarPlacaScreenState extends State<BuscarPlacaScreen> {
                       children: [
                         ListTile(
                           leading: EstadoVehiculoIcon(liberado: tieneLibertad),
-                          title: Text('INGRESO — ${c.placa}'),
-                          subtitle: Text('${c.marca} ${c.color} — Hoja ${c.hojaIngresoNro}'),
+                          title: Text('${c.placa} — ${c.marca} ${c.color}'),
+                          subtitle: Text('Hoja ${c.hojaIngresoNro}'),
                           trailing: const Icon(Icons.edit),
                           onTap: () => Navigator.push(
                             context,
@@ -143,18 +144,29 @@ class _BuscarPlacaScreenState extends State<BuscarPlacaScreen> {
                             ),
                           ).then((_) => _buscar()),
                         ),
-                        if (!tieneLibertad)
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                            child: Align(
-                              alignment: Alignment.centerRight,
-                              child: FilledButton.tonalIcon(
-                                icon: const Icon(Icons.logout),
-                                label: const Text('Liberar vehículo'),
-                                onPressed: () => _liberarVehiculo(c),
-                              ),
-                            ),
+                        // 14/sep (ronda 22): mismo sello grande de "Ingresos
+                        // guardados", con el estado REAL del vehículo — así
+                        // buscar una placa dice de un vistazo si sigue
+                        // ingresado o si ya fue liberado.
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                          child: Column(
+                            children: [
+                              SelloEstadoGrande(liberado: tieneLibertad),
+                              if (!tieneLibertad) ...[
+                                const SizedBox(height: 12),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: FilledButton.tonalIcon(
+                                    icon: const Icon(Icons.logout),
+                                    label: const Text('Liberar vehículo'),
+                                    onPressed: () => _liberarVehiculo(c),
+                                  ),
+                                ),
+                              ],
+                            ],
                           ),
+                        ),
                       ],
                     ),
                   );

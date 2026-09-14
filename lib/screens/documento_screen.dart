@@ -18,23 +18,21 @@ import 'captura_screen.dart';
 /// como un sello de goma. Reutilizable en cualquier pantalla que liste
 /// ingresos/libertades.
 ///
-/// 13/sep (ronda 21): Xavier reportó que en la lista de "Ingresos
-/// guardados" el sello se veía en VERDE con la palabra "LIBERADO" para
-/// casos que ya tenían libertad registrada — pero esa palabra/color es
-/// propia de la lista de Libertades y ahí confundía. Se agrega el modo
-/// [SelloEstadoGrande.ingresado], que siempre muestra "INGRESADO" en
-/// rojo sin importar si el vehículo ya salió o no (ese estado en tiempo
-/// real lo sigue mostrando el ícono de la izquierda y el botón "Liberar
-/// vehículo" debajo).
-enum _EstadoSello { ingresado, enElPatio, liberado }
+/// 14/sep (ronda 22): vuelve a ser el ESTADO REAL del vehículo (no un
+/// texto fijo por pantalla) — es justo lo que Xavier quiere: si busca una
+/// placa (ya sea en "Ingresos guardados" o en "Buscar por placa") y el
+/// vehículo YA tiene una Libertad registrada, el sello debe decir
+/// "LIBERADO" en verde; si todavía no la tiene, debe decir "INGRESADO"
+/// en rojo. El modo fijo `.ingresado()` de la ronda 21 quedó retirado
+/// porque contradecía esto (siempre mostraba "INGRESADO" aunque el
+/// vehículo ya hubiera salido).
+enum _EstadoSello { ingresado, liberado }
 
 class SelloEstadoGrande extends StatelessWidget {
   final _EstadoSello _estado;
 
   const SelloEstadoGrande({super.key, required bool liberado})
-      : _estado = liberado ? _EstadoSello.liberado : _EstadoSello.enElPatio;
-
-  const SelloEstadoGrande.ingresado({super.key}) : _estado = _EstadoSello.ingresado;
+      : _estado = liberado ? _EstadoSello.liberado : _EstadoSello.ingresado;
 
   @override
   Widget build(BuildContext context) {
@@ -46,11 +44,6 @@ class SelloEstadoGrande extends StatelessWidget {
         color = Colors.green.shade700;
         texto = 'LIBERADO';
         icono = Icons.check_circle_outline;
-        break;
-      case _EstadoSello.enElPatio:
-        color = Colors.red.shade700;
-        texto = 'EN EL PATIO';
-        icono = Icons.lock_outline;
         break;
       case _EstadoSello.ingresado:
         color = Colors.red.shade700;
@@ -231,11 +224,13 @@ class _DocumentoScreenState extends State<DocumentoScreen> {
                                   // 02/sep: sello grande visible + botón "Liberar
                                   // vehículo" — Xavier pidió aprovechar el
                                   // espacio libre debajo de cada caso.
+                                  // 14/sep (ronda 22): el sello ahora refleja el
+                                  // estado REAL (tieneLibertad), no un texto fijo.
                                   Padding(
                                     padding: const EdgeInsets.fromLTRB(12, 4, 12, 14),
                                     child: Column(
                                       children: [
-                                        const SelloEstadoGrande.ingresado(),
+                                        SelloEstadoGrande(liberado: tieneLibertad),
                                         if (!tieneLibertad) ...[
                                           const SizedBox(height: 12),
                                           SizedBox(
