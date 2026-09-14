@@ -11,6 +11,15 @@ import 'docx_builder.dart';
 import 'excel_matriz_builder.dart';
 import 'firestore_sync_service.dart';
 
+/// Ronda 23: se lanza cuando se intenta guardar un Ingreso NUEVO para
+/// una placa que ya tiene un Ingreso ABIERTO (sin Libertad todavía) —
+/// Xavier pidió que la app avise y no deje duplicar el mismo vehículo
+/// en el patio.
+class IngresoDuplicadoException implements Exception {
+  final CasoIngreso ingresoExistente;
+  IngresoDuplicadoException(this.ingresoExistente);
+}
+
 /// Fuente de verdad de los datos: todo se guarda como JSON en
 /// SharedPreferences (NO se usa dart:io/path_provider — así "Descargar"
 /// y "Enviar por WhatsApp" pueden compartir el mismo flujo de
@@ -142,13 +151,43 @@ class StorageService {
     return libertades.any((l) => l.hojaIngresoNro == hojaIngresoNro);
   }
 
+  /// Ronda 23: devuelve el Ingreso ya guardado para esa placa que
+  /// TODAVÍA no tiene Libertad registrada (o sea, el vehículo sigue
+  /// retenido en el patio), o null si no hay ninguno abierto. Se usa
+  /// para impedir ingresar el mismo vehículo dos veces mientras no ha
+  /// salido. `excluirId` sirve para no comparar un caso contra sí
+  /// mismo cuando se está editando.
+  static Future<CasoIngreso?> ingresoAbiertoPorPlaca(String placa, {String? excluirId}) async {
+    final normalizada = placa.replaceAll('-', '').replaceAll(' ', '').toUpperCase();
+    if (normalizada.isEmpty) return null;
+    final ingresos = await obtenerIngresos();
+    final libertades = await obtenerLibertades();
+    final hojasLiberadas = libertades.map((l) => l.hojaIngresoNro).toSet();
+    for (final ing in ingresos) {
+      if (excluirId != null && ing.id == excluirId) continue;
+      final placaIng = ing.placa.replaceAll('-', '').replaceAll(' ', '').toUpperCase();
+      if (placaIng == normalizada && !hojasLiberadas.contains(ing.hojaIngresoNro)) {
+        return ing;
+      }
+    }
+    return null;
+  }
+
   // ---------- Guardado (upsert por id) ----------
 
   static Future<void> guardarCasoIngreso(CasoIngreso caso) async {
     await _asegurarCargadoLocal();
     final indice = _cacheIngresos!.indexWhere((c) => c.id == caso.id);
     final esEdicion = indice != -1; // ronda 21: ya existía localmente -> es una edición
+
     if (!esEdicion) {
+      // Ronda 23: antes de crear un Ingreso NUEVO, se verifica que esa
+      // placa no tenga ya un Ingreso abierto (sin Libertad) — evita
+      // duplicar el mismo vehículo en el patio.
+      final duplicado = await ingresoAbiertoPorPlaca(caso.placa, excluirId: caso.id);
+      if (duplicado != null) {
+        throw IngresoDuplicadoException(duplicado);
+      }
       _cacheIngresos!.add(caso);
     } else {
       _cacheIngresos![indice] = caso;

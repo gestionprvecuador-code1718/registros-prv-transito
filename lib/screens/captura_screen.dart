@@ -192,21 +192,32 @@ class _CapturaScreenState extends State<CapturaScreen> {
 
       if (!mounted) return;
 
-      if (participantes.isEmpty) {
+      // Ronda 23: antes, si el bloque de vehículo/placa no calzaba con
+      // ninguno de los 3 patrones conocidos, se perdían TAMBIÉN los
+      // metadatos que sí se habían leído bien (N° Parte, Fecha/Hora del
+      // hecho, Circunstancias) — eran datos ya extraídos con éxito y se
+      // botaban junto con el vehículo fallido. Ahora, si no se detectó
+      // ningún vehículo, se sigue igual a la pantalla de siempre pero
+      // con UN participante en blanco (para llenar placa/marca/etc. a
+      // mano), conservando los metadatos ya extraídos.
+      final listaParticipantes = participantes.isEmpty
+          ? [ParticipanteVehiculo(placa: '')]
+          : participantes;
+
+      if (participantes.isEmpty && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('No se detectó ningún vehículo en este PDF (ni con IA ni sin conexión). '
-                'Prueba con las fotos o llena el formulario a mano.'),
-            duration: Duration(seconds: 5),
+            content: Text('No se detectó el vehículo en este PDF, pero sí se leyeron los demás datos '
+                '(N° Parte, fecha, hora, circunstancias). Completa la placa y los datos del vehículo a mano.'),
+            duration: Duration(seconds: 6),
           ),
         );
-        return;
       }
 
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => SeleccionarVehiculoScreen(participantes: participantes, metadatos: metadatos, textoCompleto: texto),
+          builder: (_) => SeleccionarVehiculoScreen(participantes: listaParticipantes, metadatos: metadatos, textoCompleto: texto),
         ),
       );
     } catch (e) {

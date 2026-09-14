@@ -233,9 +233,15 @@ class HomeScreen extends StatelessWidget {
                     const SizedBox(height: 16),
                     _BotonPrincipal(
                       icono: Icons.logout,
-                      titulo: 'LIBERTAD',
+                      // Ronda 23: "LIBERTAD" no tenía mucho sentido como
+                      // rótulo porque abajo ya existía la tarjeta "Ver
+                      // libertades" — Xavier pidió renombrarlo a "BUSCAR
+                      // VEHÍCULOS EN EL PATIO" (mismo botón, mismo color,
+                      // misma función y mismo destino de siempre:
+                      // BuscarPlacaScreen, donde está "Liberar vehículo").
+                      titulo: 'BUSCAR VEHÍCULOS EN EL PATIO',
                       subtitulo: 'Registrar la devolución / libertad de un vehículo',
-                      // 01/sep: Libertad = VERDE (antes naranja) — confirmado por Xavier
+                      // 01/sep: Libertad = VERDE (antes naranja) — confirmado por Xavier. Se mantiene el verde.
                       color: Colors.green.shade700,
                       // 02/sep: BUG CORREGIDO — este botón mandaba a CapturaScreen()
                       // (la MISMA pantalla de escanear un Ingreso nuevo), así que
@@ -267,15 +273,11 @@ class HomeScreen extends StatelessWidget {
                       mainAxisSpacing: 12,
                       childAspectRatio: 1,
                       children: [
-                        _TarjetaVidrio(
-                          icono: Icons.search,
-                          colorIcono: Colors.lightBlueAccent,
-                          titulo: 'Buscar placa',
-                          onTap: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (_) => const BuscarPlacaScreen()),
-                          ),
-                        ),
+                        // Ronda 23: se quitó la tarjeta "Buscar placa" de
+                        // aquí — quedaba redundante porque el botón verde
+                        // grande de arriba ("BUSCAR VEHÍCULOS EN EL
+                        // PATIO") ya manda exactamente a la misma pantalla
+                        // (BuscarPlacaScreen).
                         _TarjetaVidrio(
                           icono: Icons.travel_explore,
                           colorIcono: Colors.tealAccent,

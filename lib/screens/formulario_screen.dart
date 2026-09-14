@@ -409,6 +409,28 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
   /// que se notara). Ahora solo avisa y deja decidir: completar ahora
   /// o guardar igual y completarlo después (útil cuando el vehículo
   /// llega sin todos los datos a mano).
+  /// Ronda 23: alerta bloqueante cuando ya existe un Ingreso abierto
+  /// (sin Libertad) para esa misma placa — impide guardar un ingreso
+  /// duplicado del mismo vehículo mientras sigue en el patio.
+  Future<void> _mostrarAlertaIngresoDuplicado(CasoIngreso existente) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Vehículo ya ingresado'),
+        content: Text(
+          'La placa ${existente.placa} ya tiene un Ingreso registrado '
+          '(Hoja ${existente.hojaIngresoNro.isEmpty ? "s/n" : existente.hojaIngresoNro}) '
+          'que todavía no tiene Libertad. No se puede volver a ingresar '
+          'mientras el vehículo siga retenido.',
+        ),
+        actions: [
+          FilledButton(onPressed: () => Navigator.pop(context), child: const Text('Entendido')),
+        ],
+      ),
+    );
+  }
+
   Future<bool> _puedeContinuar() async {
     final valido = _formKey.currentState!.validate();
     if (valido) return true;
@@ -431,11 +453,29 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
   }
 
   Future<void> _guardar({bool compartirDespues = false}) async {
-    if (!await _puedeContinuar()) return;
+    // Ronda 23: el guard de "_guardando" se pone ANTES de cualquier
+    // await (antes se ponía después de _puedeContinuar(), que es
+    // asíncrono) — un doble-toque rápido alcanzaba a disparar esta
+    // función dos veces antes de que el botón se desactivara, y como
+    // el vehículo todavía no estaba guardado, ambas llamadas lo
+    // agregaban por separado (causa real del ingreso duplicado).
+    if (_guardando) return;
     setState(() => _guardando = true);
 
+    if (!await _puedeContinuar()) {
+      setState(() => _guardando = false);
+      return;
+    }
+
     _aplicarCambiosACaso();
-    await StorageService.guardarCasoIngreso(_caso);
+    try {
+      await StorageService.guardarCasoIngreso(_caso);
+    } on IngresoDuplicadoException catch (e) {
+      if (!mounted) return;
+      setState(() => _guardando = false);
+      await _mostrarAlertaIngresoDuplicado(e.ingresoExistente);
+      return;
+    }
 
     if (!mounted) return;
     setState(() => _guardando = false);
@@ -459,17 +499,33 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
   }
 
   Future<void> _verVistaPrevia() async {
-    if (!await _puedeContinuar()) return;
+    // Ronda 23: mismo guard sincrónico que en _guardar() (ver comentario ahí).
+    if (_guardando) return;
+    setState(() => _guardando = true);
+
+    if (!await _puedeContinuar()) {
+      setState(() => _guardando = false);
+      return;
+    }
     _aplicarCambiosACaso();
 
     final accion = await Navigator.push<String>(
       context,
       MaterialPageRoute(builder: (_) => _VistaPreviaIngresoScreen(caso: _caso)),
     );
-    if (accion == null || !mounted) return;
+    if (accion == null || !mounted) {
+      setState(() => _guardando = false);
+      return;
+    }
 
-    setState(() => _guardando = true);
-    await StorageService.guardarCasoIngreso(_caso);
+    try {
+      await StorageService.guardarCasoIngreso(_caso);
+    } on IngresoDuplicadoException catch (e) {
+      if (!mounted) return;
+      setState(() => _guardando = false);
+      await _mostrarAlertaIngresoDuplicado(e.ingresoExistente);
+      return;
+    }
     if (!mounted) return;
     setState(() => _guardando = false);
 
