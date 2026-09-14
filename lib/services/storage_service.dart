@@ -51,7 +51,7 @@ class StorageService {
     return perfil?['patio'] ?? '';
   }
 
-  static Future<void> _asegurarCargado() async {
+  static Future<void> _asegurarCargadoLocal() async {
     if (_cacheIngresos != null && _cacheLibertades != null) return;
     final prefs = await SharedPreferences.getInstance();
 
@@ -77,14 +77,46 @@ class StorageService {
   }
 
   // ---------- Lectura ----------
+  //
+  // Ronda 20: la nube (Firestore) pasa a ser la fuente de verdad, no
+  // el teléfono. Antes se leía SIEMPRE de SharedPreferences (local) y
+  // la subida a Firestore era de solo escritura ("mejor esfuerzo" en
+  // segundo plano) — nadie volvía a leer de ahí. Por eso, al cambiar
+  // de sesión/dispositivo o perder los datos locales, no aparecía
+  // nada. Ahora cada lectura intenta primero la nube (y de paso deja
+  // la copia local al día, como respaldo); si no hay internet, sigue
+  // funcionando con la última copia local guardada, sin bloquear al
+  // usuario.
 
   static Future<List<CasoIngreso>> obtenerIngresos() async {
-    await _asegurarCargado();
+    final patio = await _patioDelUsuario();
+    if (patio.isNotEmpty) {
+      try {
+        final desdeNube = await FirestoreSyncService().obtenerIngresos(patio);
+        _cacheIngresos = desdeNube;
+        await _guardarIngresosEnDisco();
+        return List<CasoIngreso>.from(desdeNube);
+      } catch (_) {
+        // Sin internet (u otra falla): se sigue con la copia local.
+      }
+    }
+    await _asegurarCargadoLocal();
     return List<CasoIngreso>.from(_cacheIngresos!);
   }
 
   static Future<List<CasoLibertad>> obtenerLibertades() async {
-    await _asegurarCargado();
+    final patio = await _patioDelUsuario();
+    if (patio.isNotEmpty) {
+      try {
+        final desdeNube = await FirestoreSyncService().obtenerLibertades(patio);
+        _cacheLibertades = desdeNube;
+        await _guardarLibertadesEnDisco();
+        return List<CasoLibertad>.from(desdeNube);
+      } catch (_) {
+        // Sin internet (u otra falla): se sigue con la copia local.
+      }
+    }
+    await _asegurarCargadoLocal();
     return List<CasoLibertad>.from(_cacheLibertades!);
   }
 
@@ -113,14 +145,14 @@ class StorageService {
   // ---------- Guardado (upsert por id) ----------
 
   static Future<void> guardarCasoIngreso(CasoIngreso caso) async {
-    await _asegurarCargado();
+    await _asegurarCargadoLocal();
     final indice = _cacheIngresos!.indexWhere((c) => c.id == caso.id);
     if (indice == -1) {
       _cacheIngresos!.add(caso);
     } else {
       _cacheIngresos![indice] = caso;
     }
-    await _guardarIngresosEnDisco();
+    await _guardarIngresosEnDisco(); // respaldo local inmediato, por si no hay internet
 
     // Se "recuerdan" para prellenar el próximo Informe Semanal.
     if (caso.subzona.trim().isNotEmpty) ultimaSubzona = caso.subzona;
@@ -128,21 +160,26 @@ class StorageService {
     if (caso.policiaNombre.trim().isNotEmpty) ultimoPoliciaNombre = caso.policiaNombre;
 
     final patio = await _patioDelUsuario();
-    unawaited(FirestoreSyncService().subirIngreso(caso, patio: patio));
+    // Ronda 20: antes esto era "unawaited" (subía en segundo plano sin
+    // que nadie confirmara si de verdad llegó a la nube). Ahora se
+    // espera la subida real — que es la fuente de verdad — y si falla
+    // por falta de internet el caso de todos modos ya quedó a salvo
+    // en el respaldo local de arriba.
+    await FirestoreSyncService().subirIngreso(caso, patio: patio);
   }
 
   static Future<void> guardarCasoLibertad(CasoLibertad caso) async {
-    await _asegurarCargado();
+    await _asegurarCargadoLocal();
     final indice = _cacheLibertades!.indexWhere((c) => c.id == caso.id);
     if (indice == -1) {
       _cacheLibertades!.add(caso);
     } else {
       _cacheLibertades![indice] = caso;
     }
-    await _guardarLibertadesEnDisco();
+    await _guardarLibertadesEnDisco(); // respaldo local inmediato, por si no hay internet
 
     final patio = await _patioDelUsuario();
-    unawaited(FirestoreSyncService().subirLibertad(caso, patio: patio));
+    await FirestoreSyncService().subirLibertad(caso, patio: patio);
   }
 
   // ---------- Generación de documentos ----------

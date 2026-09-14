@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../data/causa_legal_catalogo.dart';
 import '../models/caso_ingreso.dart';
@@ -117,8 +118,6 @@ String normalizarTipoVehiculo(String? deteccion) {
   return 'OTRO';
 }
 
-const _tiposVehiculo = tiposVehiculoConocidos;
-
 const _tiposCobroParqueo = ['LIVIANO', 'PESADO', 'MOTOCICLETA', 'EXTRAPESADO'];
 
 const _tiposTraslado = ['SUS PROPIOS MEDIOS', 'PARTICULAR', 'GRÚA POLICIAL'];
@@ -169,6 +168,16 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
   final _autoridadRequirenteCtrl = TextEditingController();
 
   String _tipoVehiculo = 'AUTOMÓVIL';
+  // Ronda 20: catálogo de tipos de vehículo QUE SE PUEDE AMPLIAR en
+  // tiempo real — arranca con el catálogo fijo (tiposVehiculoConocidos)
+  // y le suma cualquier tipo "aprendido" antes (SharedPreferences,
+  // mismo espíritu que CampoAutocompletable) más el de este caso en
+  // particular si vino con un tipo que la IA detectó y no estaba en
+  // ningún lado (ej. "Triciclo") — así el dropdown lo puede mostrar ya
+  // seleccionado sin caerse (Dropdown exige que el valor actual esté
+  // en la lista de items) y sin perder el dato real.
+  List<String> _tiposVehiculoDisponibles = List<String>.from(tiposVehiculoConocidos);
+  static const _prefKeyTiposVehiculoAprendidos = 'tipos_vehiculo_aprendidos';
   String _tipoOperativo = 'SIN OPERATIVO';
   String _causaLegal = '';
   String? _detalleCausaSeleccionado;
@@ -245,9 +254,19 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
         ? _caso.autoridadRequirente
         : (_caso.causaLegal == CausaLegalCatalogo.causaAccidenteTransito ? 'FISCALÍA' : 'NO APLICA');
 
-    _tipoVehiculo = _tiposVehiculo.contains(_caso.tipoVehiculo)
+    _tipoVehiculo = _tiposVehiculoDisponibles.contains(_caso.tipoVehiculo)
         ? _caso.tipoVehiculo
         : normalizarTipoVehiculo(_caso.tipoVehiculo);
+    // Si el resultado (normalizado o tal cual venía) todavía no está
+    // en la lista de opciones (es un tipo nunca visto, ej. "TRICICLO"
+    // detectado por la IA), se agrega ya mismo para que el dropdown lo
+    // pueda mostrar seleccionado, y se recuerda para los próximos
+    // ingresos.
+    if (!_tiposVehiculoDisponibles.contains(_tipoVehiculo)) {
+      _tiposVehiculoDisponibles.add(_tipoVehiculo);
+      _recordarTipoVehiculoSiEsNuevo(_tipoVehiculo);
+    }
+    _cargarTiposVehiculoAprendidos();
     _tipoOperativo = _caso.tipoOperativo.isEmpty ? 'SIN OPERATIVO' : _caso.tipoOperativo;
     _causaLegal = CausaLegalCatalogo.causas.contains(_caso.causaLegal) ? _caso.causaLegal : '';
     _tipoCobroParqueo = _tiposCobroParqueo.contains(_caso.tipoCobroParqueo) ? _caso.tipoCobroParqueo : null;
@@ -255,6 +274,33 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
     _aplicaAlcohotest = _caso.aplicaAlcohotest;
 
     _tonelajeCtrl.addListener(_autocompletarTipoCobro);
+  }
+
+  /// Trae los tipos de vehículo "aprendidos" en ingresos anteriores
+  /// (ej. "TRICICLO") y los suma a las opciones del dropdown, sin
+  /// duplicar los que ya están del catálogo fijo.
+  Future<void> _cargarTiposVehiculoAprendidos() async {
+    final prefs = await SharedPreferences.getInstance();
+    final guardados = prefs.getStringList(_prefKeyTiposVehiculoAprendidos) ?? [];
+    if (!mounted) return;
+    setState(() {
+      for (final t in guardados) {
+        if (!_tiposVehiculoDisponibles.contains(t)) _tiposVehiculoDisponibles.add(t);
+      }
+    });
+  }
+
+  /// Guarda un tipo de vehículo nuevo (que no está en el catálogo
+  /// fijo) para que la próxima vez ya aparezca como opción — mismo
+  /// principio que CampoAutocompletable, pero para el dropdown.
+  Future<void> _recordarTipoVehiculoSiEsNuevo(String tipo) async {
+    if (tipo.trim().isEmpty || tiposVehiculoConocidos.contains(tipo)) return;
+    final prefs = await SharedPreferences.getInstance();
+    final guardados = prefs.getStringList(_prefKeyTiposVehiculoAprendidos) ?? [];
+    if (!guardados.contains(tipo)) {
+      guardados.add(tipo);
+      await prefs.setStringList(_prefKeyTiposVehiculoAprendidos, guardados);
+    }
   }
 
   @override
@@ -641,7 +687,7 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
                 initialValue: _tipoVehiculo,
                 isExpanded: true,
                 decoration: const InputDecoration(labelText: 'Tipo de vehículo', border: OutlineInputBorder(), isDense: true),
-                items: _tiposVehiculo
+                items: _tiposVehiculoDisponibles
                     .map((t) => DropdownMenuItem(value: t, child: Text(t, overflow: TextOverflow.ellipsis)))
                     .toList(),
                 onChanged: (v) => setState(() {
