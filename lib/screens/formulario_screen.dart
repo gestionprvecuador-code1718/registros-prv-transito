@@ -67,7 +67,57 @@ class FormularioIngresoScreen extends StatefulWidget {
   State<FormularioIngresoScreen> createState() => _FormularioIngresoScreenState();
 }
 
-const _tiposVehiculo = ['AUTOMÓVIL', 'CAMIONETA', 'CAMIÓN', 'BUS', 'MOTOCICLETA', 'PLATAFORMA', 'OTRO'];
+/// Catálogo de tipos de vehículo del dropdown. Se amplió en la ronda
+/// 19: el catálogo viejo (solo 7 palabras) hacía que cualquier tipo
+/// que la IA detectara y no calzara EXACTO con una de esas 7 (ej.
+/// "Furgón", "Jeep", o hasta "Camion" sin tilde) cayera en silencio
+/// al valor por defecto "AUTOMÓVIL" — un dato falso sin que nadie lo
+/// notara.
+const tiposVehiculoConocidos = [
+  'AUTOMÓVIL', 'CAMIONETA', 'CAMIÓN', 'FURGÓN', 'JEEP', 'BUS', 'BUSETA',
+  'VAN', 'TRÁILER', 'CABEZAL', 'VOLQUETA', 'TANQUERO', 'MOTOCICLETA',
+  'CUATRIMOTO', 'PLATAFORMA', 'GRÚA', 'MIXTO', 'OTRO',
+];
+
+/// Convierte lo que devolvió la IA (o lo que diga un parte, tal cual
+/// venga escrito: con/sin tilde, mayúsculas/minúsculas, sinónimos) al
+/// valor exacto del catálogo de arriba, para que el dropdown lo
+/// muestre ya seleccionado en vez de caer a un valor por defecto
+/// equivocado. Si de verdad no reconoce ningún tipo, devuelve 'OTRO'
+/// — nunca 'AUTOMÓVIL': mejor que quede evidente que hay que
+/// revisarlo a mano que dejar un dato falso.
+String normalizarTipoVehiculo(String? deteccion) {
+  if (deteccion == null || deteccion.trim().isEmpty) return 'OTRO';
+  String quitarTildes(String s) => s
+      .replaceAll('Á', 'A')
+      .replaceAll('É', 'E')
+      .replaceAll('Í', 'I')
+      .replaceAll('Ó', 'O')
+      .replaceAll('Ú', 'U');
+  final limpio = quitarTildes(deteccion.toUpperCase().trim());
+
+  // Sinónimos/variantes comunes en partes policiales que no
+  // coinciden letra por letra con el nombre del catálogo.
+  const sinonimos = {
+    'FURGONETA': 'FURGÓN',
+    'FURGON': 'FURGÓN',
+    'CAMION': 'CAMIÓN',
+    'TRAILER': 'TRÁILER',
+    'TRACTOCAMION': 'CABEZAL',
+    'PICK UP': 'CAMIONETA',
+    'PICKUP': 'CAMIONETA',
+    'GRUA': 'GRÚA',
+    'MOTO': 'MOTOCICLETA',
+  };
+  if (sinonimos.containsKey(limpio)) return sinonimos[limpio]!;
+
+  for (final t in tiposVehiculoConocidos) {
+    if (quitarTildes(t) == limpio) return t;
+  }
+  return 'OTRO';
+}
+
+const _tiposVehiculo = tiposVehiculoConocidos;
 
 const _tiposCobroParqueo = ['LIVIANO', 'PESADO', 'MOTOCICLETA', 'EXTRAPESADO'];
 
@@ -195,7 +245,9 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
         ? _caso.autoridadRequirente
         : (_caso.causaLegal == CausaLegalCatalogo.causaAccidenteTransito ? 'FISCALÍA' : 'NO APLICA');
 
-    _tipoVehiculo = _tiposVehiculo.contains(_caso.tipoVehiculo) ? _caso.tipoVehiculo : 'AUTOMÓVIL';
+    _tipoVehiculo = _tiposVehiculo.contains(_caso.tipoVehiculo)
+        ? _caso.tipoVehiculo
+        : normalizarTipoVehiculo(_caso.tipoVehiculo);
     _tipoOperativo = _caso.tipoOperativo.isEmpty ? 'SIN OPERATIVO' : _caso.tipoOperativo;
     _causaLegal = CausaLegalCatalogo.causas.contains(_caso.causaLegal) ? _caso.causaLegal : '';
     _tipoCobroParqueo = _tiposCobroParqueo.contains(_caso.tipoCobroParqueo) ? _caso.tipoCobroParqueo : null;
@@ -306,8 +358,34 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
       ..observaciones = _observacionesCtrl.text.trim();
   }
 
+  /// Antes esto bloqueaba todo el guardado en silencio si faltaba un
+  /// campo obligatorio (con el mensaje en rojo fuera de la vista, sin
+  /// que se notara). Ahora solo avisa y deja decidir: completar ahora
+  /// o guardar igual y completarlo después (útil cuando el vehículo
+  /// llega sin todos los datos a mano).
+  Future<bool> _puedeContinuar() async {
+    final valido = _formKey.currentState!.validate();
+    if (valido) return true;
+    if (!mounted) return false;
+    final continuar = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Faltan campos obligatorios'),
+        content: const Text(
+          'Hay campos obligatorios vacíos (marcados en rojo en el formulario). '
+          'Puedes bajar a completarlos ahora, o guardar el avance y llenarlos más tarde.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Completar campos')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Guardar de todas formas')),
+        ],
+      ),
+    );
+    return continuar ?? false;
+  }
+
   Future<void> _guardar({bool compartirDespues = false}) async {
-    if (!_formKey.currentState!.validate()) return;
+    if (!await _puedeContinuar()) return;
     setState(() => _guardando = true);
 
     _aplicarCambiosACaso();
@@ -335,7 +413,7 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
   }
 
   Future<void> _verVistaPrevia() async {
-    if (!_formKey.currentState!.validate()) return;
+    if (!await _puedeContinuar()) return;
     _aplicarCambiosACaso();
 
     final accion = await Navigator.push<String>(
@@ -685,7 +763,7 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
             const SizedBox(height: 8),
             OutlinedButton.icon(
               icon: const Icon(Icons.save_outlined),
-              label: Text(widget.esEdicion ? 'Guardar cambios' : 'Guardar sin vista previa'),
+              label: Text(widget.esEdicion ? 'Guardar cambios' : 'Guardar avance'),
               onPressed: _guardando ? null : () => _guardar(),
             ),
           ],
