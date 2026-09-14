@@ -41,6 +41,7 @@ class SeleccionarVehiculoScreen extends StatelessWidget {
       tipoVehiculo: p.tipo,
       chasis: p.chasis,
       anioFabricacion: p.anio,
+      motor: p.motor,
       // El parser ya deja "propietario" con el mismo dato de
       // "conductor" cuando el parte no distingue a uno del otro —
       // igual queda editable en el formulario.

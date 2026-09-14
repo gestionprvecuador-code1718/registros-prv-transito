@@ -310,7 +310,10 @@ class _FormularioLibertadScreenState extends State<FormularioLibertadScreen> {
       body: Form(
         key: _formKey,
         child: ListView(
-          padding: const EdgeInsets.all(16),
+          // Mismo fix que en formulario_screen.dart: deja espacio de
+          // más abajo para que el botón no quede tapado por la barra
+          // de navegación del sistema.
+          padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + MediaQuery.of(context).padding.bottom),
           children: [
             _tarjetaDatosHeredados(ing),
             const SizedBox(height: 16),

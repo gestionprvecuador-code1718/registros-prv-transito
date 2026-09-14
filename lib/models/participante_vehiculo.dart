@@ -20,6 +20,10 @@ class ParticipanteVehiculo {
   final String chasis;
   final String pais;
   final String anio;
+  // BUG corregido (ronda 18): faltaba este campo, así que el "motor"
+  // que sí devolvía la IA para el parte PDF se perdía en el camino
+  // (no había dónde guardarlo) y nunca llegaba al formulario.
+  final String motor;
 
   ParticipanteVehiculo({
     required this.placa,
@@ -34,6 +38,7 @@ class ParticipanteVehiculo {
     this.chasis = '',
     this.pais = '',
     this.anio = '',
+    this.motor = '',
   });
 
   ParticipanteVehiculo copyWith({
@@ -48,6 +53,7 @@ class ParticipanteVehiculo {
     String? chasis,
     String? pais,
     String? anio,
+    String? motor,
   }) {
     return ParticipanteVehiculo(
       placa: placa,
@@ -62,6 +68,7 @@ class ParticipanteVehiculo {
       chasis: chasis ?? this.chasis,
       pais: pais ?? this.pais,
       anio: anio ?? this.anio,
+      motor: motor ?? this.motor,
     );
   }
 }

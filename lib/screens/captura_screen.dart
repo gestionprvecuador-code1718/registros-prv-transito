@@ -117,6 +117,7 @@ class _CapturaScreenState extends State<CapturaScreen> {
                 chasis: v['chasis'] ?? '',
                 pais: v['pais'] ?? '',
                 anio: v['anio'] ?? '',
+                motor: v['motor'] ?? '',
               ))
           .where((p) => p.placa.trim().isNotEmpty)
           .toList();

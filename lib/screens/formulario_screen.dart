@@ -448,7 +448,11 @@ class _FormularioIngresoScreenState extends State<FormularioIngresoScreen> {
       body: Form(
         key: _formKey,
         child: ListView(
-          padding: const EdgeInsets.all(16),
+          // Bottom extra: evita que el último botón (Guardar) quede
+          // tapado por la barra de navegación del sistema (gestos o
+          // los 3 botones de Android) — antes el padding era fijo
+          // (16) y no consideraba esa barra.
+          padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + MediaQuery.of(context).padding.bottom),
           children: [
             // 1-3: Tipo operativo / Fecha / Hora de retención. Subzona
             // y CRV se quitaron de la pantalla (Xavier pidió
